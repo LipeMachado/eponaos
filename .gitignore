@@ -1,0 +1,31 @@
+# ===== Artefatos de build (gerados pelo Makefile) =====
+build/
+*.o
+*.obj
+*.bin
+*.elf
+*.img
+*.iso
+*.map
+*.d
+
+# ===== macOS =====
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ===== Editores / IDEs =====
+*.swp
+*.swo
+*~
+.idea/
+*.sublime-workspace
+# .vscode/ e configs do editor sao mantidos de proposito (setup do projeto).
+# Se preferir NAO versionar, descomente:
+# .vscode/
+
+# ===== Logs / temporarios =====
+*.log
+tmp/
+*.tmp

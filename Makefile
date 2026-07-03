@@ -1,0 +1,91 @@
+ASM     := nasm
+CC      := x86_64-elf-gcc
+OBJCOPY := x86_64-elf-objcopy
+QEMU    := qemu-system-x86_64
+CLANG_FORMAT := clang-format
+
+BOOT  := boot
+BUILD := build
+
+CFLAGS := -std=c17 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
+          -mno-red-zone -mno-sse -mno-mmx -mno-80387 -mcmodel=large \
+          -Wall -Wextra -Iinclude
+
+KOBJS := $(BUILD)/entry.o $(BUILD)/main.o $(BUILD)/vga.o $(BUILD)/serial.o \
+           $(BUILD)/gdt.o $(BUILD)/gdt_flush.o \
+           $(BUILD)/idt.o $(BUILD)/isr.o $(BUILD)/isr_stub.o \
+           $(BUILD)/pic.o $(BUILD)/pit.o $(BUILD)/keyboard.o \
+		   $(BUILD)/pmm.o $(BUILD)/string.o
+
+STAGE1     := $(BUILD)/stage1.bin
+STAGE2     := $(BUILD)/stage2.bin
+KERNEL_ELF := $(BUILD)/kernel.elf
+KERNEL_BIN := $(BUILD)/kernel.bin
+IMG        := $(BUILD)/eponaos.img
+QEMUFLAGS  := -drive format=raw,file=$(IMG) -serial stdio -no-reboot
+
+.PHONY: all run debug clean format
+all: $(IMG)
+
+$(BUILD)/entry.o: kernel/entry.asm | $(BUILD)
+	$(ASM) -f elf64 $< -o $@
+$(BUILD)/main.o: kernel/main.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/string.o: lib/string.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/vga.o: drivers/vga.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/serial.o: drivers/serial.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/gdt.o: kernel/gdt.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/gdt_flush.o: kernel/gdt_flush.asm | $(BUILD)
+	$(ASM) -f elf64 $< -o $@
+$(BUILD)/idt.o: kernel/idt.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/isr.o: kernel/isr.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/isr_stub.o: kernel/isr.asm | $(BUILD)
+	$(ASM) -f elf64 $< -o $@
+$(BUILD)/pic.o: kernel/pic.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/pit.o: kernel/pit.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/keyboard.o: drivers/keyboard.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/pmm.o: mm/pmm.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(KERNEL_ELF): $(KOBJS) linker.ld
+	$(CC) -nostdlib -no-pie -T linker.ld -o $@ $(KOBJS) -lgcc
+
+$(KERNEL_BIN): $(KERNEL_ELF)
+	$(OBJCOPY) -O binary $< $@
+	@SIZE=$$(wc -c < $@); PAD=$$(( (512 - SIZE % 512) % 512 )); \
+	 if [ $$PAD -ne 0 ]; then dd if=/dev/zero bs=1 count=$$PAD >> $@ 2>/dev/null; fi
+	@echo "==> kernel.bin: $$(wc -c < $@) bytes / $$(( $$(wc -c < $@) / 512 )) setores"
+
+$(STAGE1): $(BOOT)/stage1.asm | $(BUILD)
+	$(ASM) -f bin $< -o $@
+$(STAGE2): $(BOOT)/stage2.asm $(KERNEL_BIN) | $(BUILD)
+	@KS=$$(( $$(wc -c < $(KERNEL_BIN)) / 512 )); \
+	 echo "==> stage2 com KERNEL_SECTORS=$$KS"; \
+	 $(ASM) -f bin -D KERNEL_SECTORS=$$KS $< -o $@
+
+$(IMG): $(STAGE1) $(STAGE2) $(KERNEL_BIN)
+	cat $(STAGE1) $(STAGE2) $(KERNEL_BIN) > $@
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+run: $(IMG)
+	$(QEMU) $(QEMUFLAGS) -d guest_errors
+debug: $(IMG)
+	$(QEMU) $(QEMUFLAGS) -S -s
+
+format:
+	$(CLANG_FORMAT) -i kernel/*.c lib/*.c include/*.h 2>/dev/null || true
+	@echo "==> C formatado (asm/make sem formatador; editorconfig cuida do whitespace)"
+
+clean:
+	rm -rf $(BUILD)/*

@@ -34,5 +34,10 @@ int paging_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_unmap_page(uint64_t virt);
 uint64_t paging_get_phys(uint64_t virt);
 int paging_map_range(uint64_t virt, uint64_t phys, size_t pages, uint64_t flags);
+int paging_add_flags(uint64_t virt, uint64_t flags);
+void paging_flush_tlb(void);
+uint64_t paging_clone_current(void);
+int paging_map_page_on(page_table_t *pml4, uint64_t virt, uint64_t phys, uint64_t flags);
+uint64_t paging_get_phys_on(page_table_t *pml4, uint64_t virt);
 
 #endif

@@ -16,6 +16,7 @@ typedef struct task_struct {
     uint32_t       pid;
     task_state_t   state;
     uint64_t       rsp;        /* stack pointer (RSP) quando nao executando */
+    uint64_t       cr3;        /* CR3 (PML4 phys) for this task, 0 = kernel */
     void           (*entry)(void);  /* funcao de entrada */
     struct task_struct *next;  /* proximo na lista circular */
 } task_struct_t;

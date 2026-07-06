@@ -1,0 +1,4 @@
+name=shell
+version=0.1
+file=shell.elf
+description=Epona user-space shell

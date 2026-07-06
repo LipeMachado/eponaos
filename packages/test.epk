@@ -1,0 +1,4 @@
+name=test
+version=0.1
+file=test.elf
+description=Ring 3 syscall and filesystem test

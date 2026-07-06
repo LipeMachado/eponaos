@@ -1,0 +1,4 @@
+repo=Epona Core
+version=1
+package=shell
+package=test

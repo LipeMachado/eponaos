@@ -27,6 +27,7 @@ struct vfs_filesystem {
     vfs_node_t *root;
     void *private;
     int (*read)(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf);
+    int (*write)(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf);
     int (*readdir)(vfs_node_t *node, int (*cb)(const char *name, uint32_t size, uint8_t flags, void *), void *arg);
 };
 
@@ -39,6 +40,7 @@ void vfs_init(void);
 int vfs_mount(const char *path, vfs_filesystem_t *fs);
 file_t *vfs_open(const char *path);
 int vfs_read(file_t *f, uint64_t size, void *buf);
+int vfs_write(file_t *f, uint64_t size, void *buf);
 void vfs_close(file_t *f);
 int vfs_readdir(const char *path, int (*cb)(const char *name, uint32_t size, uint8_t flags, void *), void *arg);
 

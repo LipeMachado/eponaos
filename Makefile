@@ -17,7 +17,9 @@ KOBJS := $(BUILD)/entry.o $(BUILD)/main.o $(BUILD)/vga.o $(BUILD)/serial.o \
            $(BUILD)/pic.o $(BUILD)/pit.o $(BUILD)/keyboard.o $(BUILD)/mouse.o \
 		   $(BUILD)/pmm.o $(BUILD)/paging.o $(BUILD)/heap.o $(BUILD)/string.o \
 		   $(BUILD)/scheduler.o $(BUILD)/switch.o $(BUILD)/pci.o $(BUILD)/ata.o \
-		   $(BUILD)/vfs.o $(BUILD)/fat.o $(BUILD)/rtl8139.o $(BUILD)/net.o
+		   $(BUILD)/vfs.o $(BUILD)/fat.o $(BUILD)/rtl8139.o $(BUILD)/net.o \
+		   $(BUILD)/shell.o $(BUILD)/syscall.o $(BUILD)/syscall_asm.o \
+		   $(BUILD)/elf.o
 
 STAGE1     := $(BUILD)/stage1.bin
 STAGE2     := $(BUILD)/stage2.bin
@@ -30,7 +32,7 @@ QEMUFLAGS  := -drive format=raw,file=$(IMG) -drive format=raw,file=$(DATA_IMG) \
               -serial stdio -no-reboot
 
 .PHONY: all run debug clean format
-all: $(IMG) $(DATA_IMG)
+all: $(IMG) $(DATA_IMG) $(BUILD_USER)
 
 $(BUILD)/entry.o: kernel/entry.asm | $(BUILD)
 	$(ASM) -f elf64 $< -o $@
@@ -68,6 +70,8 @@ $(BUILD)/rtl8139.o: drivers/rtl8139.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/net.o: net/net.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/shell.o: kernel/shell.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/vfs.o: fs/vfs.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/fat.o: fs/fat.c | $(BUILD)
@@ -82,6 +86,34 @@ $(BUILD)/scheduler.o: kernel/scheduler.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/switch.o: kernel/switch.asm | $(BUILD)
 	$(ASM) -f elf64 $< -o $@
+$(BUILD)/syscall.o: kernel/syscall.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/syscall_asm.o: kernel/syscall_asm.asm | $(BUILD)
+	$(ASM) -f elf64 $< -o $@
+$(BUILD)/elf.o: kernel/elf.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# user-space programs
+USER_CFLAGS := -std=c17 -ffreestanding -nostdlib -fno-stack-protector -fno-pie -fno-pic \
+               -mno-red-zone -mno-sse -mno-mmx -mno-80387 -mcmodel=large -Wall -Wextra \
+               -I user -I include
+BUILD_USER := $(BUILD)/test.elf $(BUILD)/shell.elf
+
+$(BUILD)/test.o: user/test.S user/link.ld | $(BUILD)
+	nasm -f elf64 user/test.S -o $@
+$(BUILD)/crt0.o: user/crt0.S | $(BUILD)
+	nasm -f elf64 user/crt0.S -o $@
+$(BUILD)/test_c.o: user/test.c | $(BUILD)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/test.elf: $(BUILD)/crt0.o $(BUILD)/test_c.o user/link.ld | $(BUILD)
+	x86_64-elf-ld -T user/link.ld -o $@ $(BUILD)/crt0.o $(BUILD)/test_c.o
+	@echo "==> user test_c.elf created"
+
+$(BUILD)/shell_c.o: user/shell.c | $(BUILD)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+$(BUILD)/shell.elf: $(BUILD)/crt0.o $(BUILD)/shell_c.o user/link.ld | $(BUILD)
+	x86_64-elf-ld -T user/link.ld -o $@ $(BUILD)/crt0.o $(BUILD)/shell_c.o
+	@echo "==> user shell.elf created"
 
 $(KERNEL_ELF): $(KOBJS) linker.ld
 	$(CC) -nostdlib -no-pie -T linker.ld -o $@ $(KOBJS) -lgcc
@@ -105,17 +137,22 @@ $(IMG): $(STAGE1) $(STAGE2) $(KERNEL_BIN)
 $(BUILD):
 	mkdir -p $(BUILD)
 
-# disco FAT32 com arquivo de teste
-$(DATA_IMG): | $(BUILD)
+# disco FAT32 com arquivos de teste
+$(DATA_IMG): $(BUILD_USER) | $(BUILD)
 	dd if=/dev/zero bs=1M count=4 of=$@ 2>/dev/null
 	mkfs.fat -F 32 $@ >/dev/null 2>&1
 	echo "Hello from EponaOS! FAT32 works!" | mcopy -i $@ - ::HELLO.TXT
 	echo "Another file for listing test." | mcopy -i $@ - ::README.TXT
+	mcopy -i $@ $(BUILD)/test.elf ::TEST.ELF
+	mcopy -i $@ $(BUILD)/shell.elf ::SHELL.ELF
+	mcopy -i $@ packages/repo.epk ::REPO.EPK
+	mcopy -i $@ packages/shell.epk ::SHELL.EPK
+	mcopy -i $@ packages/test.epk ::TEST.EPK
 	@echo "==> data.img criado (FAT32)"
 
-run: $(IMG)
+run: $(IMG) $(DATA_IMG)
 	$(QEMU) $(QEMUFLAGS) -d guest_errors
-debug: $(IMG)
+debug: $(IMG) $(DATA_IMG)
 	$(QEMU) $(QEMUFLAGS) -S -s
 
 format:

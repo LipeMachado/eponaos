@@ -1,4 +1,5 @@
 #include "idt.h"
+#include "syscall.h"
 #include <stdint.h>
 
 struct idt_entry {
@@ -40,6 +41,9 @@ void idt_init(void) {
     extern void *irq_stub_table[];
     for (int i = 0; i < 16; i++)
         idt_set(32 + i, irq_stub_table[i], 0x8E);
+
+    extern void *int80_stub;
+    idt_set(128, &int80_stub, 0xEE); /* 0xEE = present, DPL=3, interrupt gate */
 
     g_idt_ptr.limit = sizeof(g_idt) - 1;
     g_idt_ptr.base = (uint64_t) &g_idt;

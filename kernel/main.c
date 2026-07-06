@@ -17,6 +17,10 @@
 #include "rtl8139.h"
 #include "net.h"
 #include "scheduler.h"
+#include "shell.h"
+#include "syscall.h"
+#include "elf.h"
+
 
 static void print_u64(uint64_t v) {
     char buf[21];
@@ -32,18 +36,60 @@ static void print_u64(uint64_t v) {
     serial_print(&buf[i]);
 }
 
+static void vga_print_ip(uint32_t ip) {
+    char buf[4];
+    for (int part = 0; part < 4; part++) {
+        uint8_t n = (uint8_t) ((ip >> (part * 8)) & 0xFF);
+        int i = 0;
+        if (n >= 100)
+            buf[i++] = (char) ('0' + n / 100);
+        if (n >= 10)
+            buf[i++] = (char) ('0' + (n / 10) % 10);
+        buf[i++] = (char) ('0' + n % 10);
+        buf[i] = 0;
+        vga_print(buf);
+        if (part < 3)
+            vga_print(".");
+    }
+}
+
+static void vga_print_preview(const char *s, int max) {
+    for (int i = 0; s[i] && i < max; i++) {
+        char c = s[i];
+        if (c == '\r' || c == '\n' || c == '\t')
+            vga_print(" ");
+        else
+            vga_putc(c);
+    }
+}
+
 /* Tasks de demonstracao da multitarefa preemptiva */
 void task_a(void) {
     __asm__ volatile("sti");
+    uint32_t ticks = 0;
     while (1) {
-        serial_print("A");
+        if (++ticks == 1000000) {
+            serial_print("A");
+            ticks = 0;
+        }
     }
 }
 
 void task_b(void) {
     __asm__ volatile("sti");
+    uint32_t ticks = 0;
     while (1) {
-        serial_print("B");
+        if (++ticks == 1000000) {
+            serial_print("B");
+            ticks = 0;
+        }
+    }
+}
+
+void task_net(void) {
+    __asm__ volatile("sti");
+    while (1) {
+        net_poll();
     }
 }
 
@@ -135,6 +181,7 @@ void kernel_main(void) {
         net_poll();
 
     scheduler_init();
+    sys_fd_init();
 
     vga_set_color(0x0B, 0x00);
     vga_print("=== EponaOS ===\n");
@@ -148,11 +195,43 @@ void kernel_main(void) {
     print_u64(pmm_total_bytes() / (1024 * 1024));
     vga_print(" MiB\n");
 
+    if (net_is_configured()) {
+        vga_set_color(0x0A, 0x00);
+        vga_print("Rede: DHCP OK  IP ");
+        vga_print_ip(net_local_ip());
+        vga_print("\n");
+    } else {
+        vga_set_color(0x0C, 0x00);
+        vga_print("Rede: DHCP falhou\n");
+    }
+
+    if (net_dns_answer_ip()) {
+        vga_set_color(0x0A, 0x00);
+        vga_print("DNS: example.com = ");
+        vga_print_ip(net_dns_answer_ip());
+        vga_print("\n");
+    }
+
+    vga_set_color(net_http_ok() ? 0x0A : 0x0C, 0x00);
+    vga_print(net_http_ok() ? "HTTP: GET / OK\n" : "HTTP: sem resposta\n");
+    if (net_http_body_len() > 0) {
+        vga_set_color(0x0E, 0x00);
+        vga_print("HTML: ");
+        vga_print_preview(net_http_body_preview(), 66);
+        vga_print("\n");
+    }
+    vga_set_color(0x0F, 0x00);
+
     task_create(task_a);
     task_create(task_b);
+    task_create(task_net);
 
     __asm__ volatile("sti");
     serial_print("[kernel] multitarefa ativa.\n");
+    vga_print("Digite 'help' para comandos.\n\n");
+
+    shell_run();
+
     schedule();
 
     for (;;) {

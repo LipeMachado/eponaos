@@ -7,4 +7,7 @@ void vga_init(void);
 void vga_set_color(uint8_t fg, uint8_t bg);
 void vga_putc(char c);
 void vga_print(const char *s);
+void vga_clear(uint8_t fg, uint8_t bg);
+void vga_put_at(uint8_t row, uint8_t col, char c, uint8_t fg, uint8_t bg);
+void vga_write_at(uint8_t row, uint8_t col, const char *s, uint8_t fg, uint8_t bg);
 #endif

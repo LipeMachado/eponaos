@@ -14,6 +14,13 @@ static uint8_t *g_tx_buffer[RTL_TX_BUFS];
 static int g_tx_cur = 0;
 static uint32_t g_rx_offset = 0;
 
+static const char g_hex[] = "0123456789ABCDEF";
+
+static void print_hex_byte(uint8_t v) {
+    serial_putc(g_hex[(v >> 4) & 0x0F]);
+    serial_putc(g_hex[v & 0x0F]);
+}
+
 #define reg8(r)  ((uint16_t) (g_io_base + (r)))
 #define reg16(r) ((uint16_t) (g_io_base + (r)))
 #define reg32(r) ((uint16_t) (g_io_base + (r)))
@@ -60,7 +67,7 @@ found:
 
     serial_print("[rtl8139] MAC: ");
     for (int i = 0; i < ETH_ALEN; i++) {
-        serial_print_hex(g_mac[i]);
+        print_hex_byte(g_mac[i]);
         if (i < 5) serial_print(":");
     }
     serial_print("\n");
@@ -169,9 +176,9 @@ void rtl8139_print_packet(const void *data, int len) {
     const eth_hdr_t *eth = (const eth_hdr_t *) data;
 
     serial_print("  dst=");
-    for (int i = 0; i < 6; i++) { serial_print_hex(eth->dst[i]); if (i<5) serial_print(":"); }
+    for (int i = 0; i < 6; i++) { print_hex_byte(eth->dst[i]); if (i<5) serial_print(":"); }
     serial_print(" src=");
-    for (int i = 0; i < 6; i++) { serial_print_hex(eth->src[i]); if (i<5) serial_print(":"); }
+    for (int i = 0; i < 6; i++) { print_hex_byte(eth->src[i]); if (i<5) serial_print(":"); }
     serial_print(" type=0x");
     serial_print_hex(bswap16(eth->type));
     serial_print("\n");

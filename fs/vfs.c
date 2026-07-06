@@ -116,6 +116,17 @@ int vfs_read(file_t *f, uint64_t size, void *buf) {
     uint64_t remain = f->node->size - f->offset;
     if (size > remain) size = remain;
     int ret = f->node->fs->read(f->node, f->offset, size, buf);
+    if (ret > 0) {
+        if ((uint64_t)ret > size) ret = (int)size;
+        f->offset += ret;
+    }
+    return ret;
+}
+
+int vfs_write(file_t *f, uint64_t size, void *buf) {
+    if (!f || !f->node || !f->node->fs || !f->node->fs->write)
+        return -1;
+    int ret = f->node->fs->write(f->node, f->offset, size, buf);
     if (ret > 0)
         f->offset += ret;
     return ret;

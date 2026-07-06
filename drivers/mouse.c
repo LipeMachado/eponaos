@@ -93,14 +93,6 @@ void mouse_irq(void) {
         if (g_mouse_packet[0] & 0x80) dy = -dy;
         g_mouse_x += dx;
         g_mouse_y += dy;
-
-        serial_print("[mouse] x=");
-        serial_print_dec(g_mouse_x);
-        serial_print(" y=");
-        serial_print_dec(g_mouse_y);
-        serial_print(" b=");
-        serial_print_hex(g_mouse_packet[0] & 7);
-        serial_print("\n");
         break;
     }
 }

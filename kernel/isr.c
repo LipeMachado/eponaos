@@ -2,8 +2,10 @@
 #include "vga.h"
 #include <stdint.h>
 #include "keyboard.h"
+#include "mouse.h"
 #include "pic.h"
 #include "pit.h"
+#include "scheduler.h"
 
 struct regs {
     uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
@@ -67,9 +69,15 @@ void isr_handler(struct regs *r) {
 
 void irq_handler(struct regs *r) {
     int irq = (int) r->vector - 32;
-    if (irq == 0)
+    if (irq == 0) {
         pit_tick();
+        pic_send_eoi(irq);
+        schedule();
+        return;
+    }
     else if (irq == 1)
         keyboard_irq();
+    else if (irq == 12)
+        mouse_irq();
     pic_send_eoi(irq);
 }

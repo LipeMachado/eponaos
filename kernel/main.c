@@ -1,4 +1,4 @@
-/* kernel/main.c — nucleo do EponaOS (M3b: drivers VGA + serial) */
+/* kernel/main.c — nucleo do EponaOS */
 #include "serial.h"
 #include "vga.h"
 #include "gdt.h"
@@ -6,6 +6,17 @@
 #include "pic.h"
 #include "pit.h"
 #include "pmm.h"
+#include "paging.h"
+#include "heap.h"
+#include "pci.h"
+#include "ata.h"
+#include "mouse.h"
+#include "string.h"
+#include "vfs.h"
+#include "fat.h"
+#include "rtl8139.h"
+#include "net.h"
+#include "scheduler.h"
 
 static void print_u64(uint64_t v) {
     char buf[21];
@@ -21,48 +32,128 @@ static void print_u64(uint64_t v) {
     serial_print(&buf[i]);
 }
 
+/* Tasks de demonstracao da multitarefa preemptiva */
+void task_a(void) {
+    __asm__ volatile("sti");
+    while (1) {
+        serial_print("A");
+    }
+}
+
+void task_b(void) {
+    __asm__ volatile("sti");
+    while (1) {
+        serial_print("B");
+    }
+}
+
 void kernel_main(void) {
     serial_init();
     vga_init();
     gdt_init();
     idt_init();
     pic_remap();
-    pit_init(100); /* 100 Hz */
+    pit_init(100);
     pmm_init();
+    paging_init();
+    heap_init();
+    pci_enumerate();
+    mouse_init();
 
-    vga_set_color(0x0B, 0x00); /* ciano claro */
+    {
+        uint16_t ident[256];
+        int bus = 0;
+        if (ata_drive_present(bus)) {
+            serial_print("[ata] primary bus present, identifying master...\n");
+            if (ata_identify(bus, 1, ident) == 0) {
+                serial_print("[ata] master drive identified.\n");
+                serial_print("[ata] signature: ");
+                serial_print_hex(ident[0]);
+                serial_print("\n");
+                uint32_t sectors = (uint32_t) ident[60] | ((uint32_t) ident[61] << 16);
+                serial_print("[ata] size: ");
+                serial_print_dec(sectors / 2 / 1024);
+                serial_print(" MiB\n");
+            } else {
+                serial_print("[ata] no master drive\n");
+            }
+        } else {
+            serial_print("[ata] no primary bus\n");
+        }
+    }
+
+    vfs_init();
+
+    {
+        vfs_filesystem_t *fat = fat_mount(0, 0, 0);
+        if (fat) {
+            vfs_mount("/", fat);
+            serial_print("[main] FAT mounted on /\n");
+
+            serial_print("[main] Root directory:\n");
+
+            vfs_readdir("/", NULL, NULL);
+
+            vfs_node_t *child = fat->root->children;
+            while (child) {
+                serial_print("  ");
+                serial_print(child->name);
+                serial_print("\n");
+                child = child->next;
+            }
+
+            file_t *f = vfs_open("/hello.txt");
+            if (f) {
+                serial_print("[main] opened file\n");
+                char buf[64];
+                int n = vfs_read(f, 63, buf);
+                if (n > 0) {
+                    buf[n] = 0;
+                    serial_print("[main] content: \"");
+                    serial_print(buf);
+                    serial_print("\"\n");
+                }
+                vfs_close(f);
+            } else {
+                serial_print("[main] could not open file\n");
+            }
+        } else {
+            serial_print("[main] slave: no FAT\n");
+
+            fat = fat_mount(0, 1, 0);
+            if (fat) {
+                vfs_mount("/", fat);
+                serial_print("[main] FAT mounted on / (master)\n");
+            } else {
+                serial_print("[main] no FAT on either drive\n");
+            }
+        }
+    }
+
+    net_init();
+    for (int i = 0; i < 5000000; i++)
+        net_poll();
+
+    scheduler_init();
+
+    vga_set_color(0x0B, 0x00);
     vga_print("=== EponaOS ===\n");
-    vga_set_color(0x0F, 0x00); /* branco */
+    vga_set_color(0x0F, 0x00);
     vga_print("Kernel em C, long mode 64-bit.\n");
-    vga_print("Driver VGA: putc, print, newline, scroll, cor e cursor.\n\n");
-    vga_print("Linha A\nLinha B\nLinha C\n");
-    vga_print("GDT do kernel + TSS carregadas (ring0/ring3).\n");
-    vga_print("IDT instalada (excecoes 0-31).\n");
+    vga_print("GDT + TSS + IDT carregadas.\n");
+    vga_print("Scheduler round-robin preemptivo.\n");
+    serial_print("[pmm] init ok.\n");
+
     vga_print("RAM total: ");
     print_u64(pmm_total_bytes() / (1024 * 1024));
-    vga_print(" MiB | livre: ");
-    print_u64(pmm_free_bytes() / (1024 * 1024));
     vga_print(" MiB\n");
 
-    /* teste: liberar e realocar deve reciclar o mesmo frame */
-    void *a = pmm_alloc();
-    void *b = pmm_alloc();
-    pmm_free(a);
-    void *c = pmm_alloc();
-    vga_print("PMM: reciclou frame liberado? ");
-    vga_print(a == c ? "SIM\n" : "NAO\n");
-    (void) b;
-    serial_print("[pmm] init + alloc/free ok.\n");
+    task_create(task_a);
+    task_create(task_b);
 
-    __asm__ volatile("sti"); /* liga interrupcoes UMA vez, com tudo pronto */
-
-    serial_print("[kernel] EponaOS iniciado.\n");
-    serial_print("[kernel] VGA + serial COM1 prontos.\n");
-    serial_print("[kernel] GDT recarregada, TR = 0x28.\n");
-
-    vga_print("Interrupcoes ON: timer 100Hz + teclado.\n");
-    vga_print("Digite algo: ");
-    serial_print("[kernel] PIC/PIT/teclado prontos; sti executado.\n");
+    __asm__ volatile("sti");
+    serial_print("[kernel] multitarefa ativa.\n");
+    schedule();
 
     for (;;) {
         __asm__ volatile("hlt");

@@ -72,6 +72,24 @@ void *pmm_alloc(void) {
     return NULL;
 }
 
+void *pmm_alloc_contiguous(uint64_t count) {
+    if (count == 0) return NULL;
+    if (count == 1) return pmm_alloc();
+    for (uint64_t f = 0; f < g_total_frames - count; f++) {
+        int ok = 1;
+        for (uint64_t i = 0; i < count; i++) {
+            if (bm_test(f + i)) { ok = 0; break; }
+        }
+        if (ok) {
+            for (uint64_t i = 0; i < count; i++)
+                bm_set(f + i);
+            g_used_frames += count;
+            return (void *) (f * PAGE_SIZE);
+        }
+    }
+    return NULL;
+}
+
 void pmm_free(void *frame) {
     uint64_t f = (uint64_t) frame / PAGE_SIZE;
     if (f < g_total_frames && bm_test(f)) {

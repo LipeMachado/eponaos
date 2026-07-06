@@ -4,6 +4,7 @@
 
 void pmm_init(void);
 void *pmm_alloc(void); /* aloca 1 frame de 4 KiB (fisico); NULL se acabar */
+void *pmm_alloc_contiguous(uint64_t count); /* count frames contiguos */
 void pmm_free(void *frame);
 uint64_t pmm_total_bytes(void);
 uint64_t pmm_free_bytes(void);

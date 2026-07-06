@@ -18,9 +18,9 @@ void pic_remap(void) {
     outb(PIC1_DATA, 0x01); /* ICW4: modo 8086 */
     outb(PIC2_DATA, 0x01);
 
-    /* mascaras: habilita só IRQ0 (timer) e IRQ1 (teclado) no mestre */
-    outb(PIC1_DATA, 0xFC); /* 1111 1100 -> IRQ0,1 ligados */
-    outb(PIC2_DATA, 0xFF); /* escravo todo mascarado */
+    /* mascaras: IRQ0 (timer), IRQ1 (teclado), IRQ2 (cascade p/ escravo) no mestre */
+    outb(PIC1_DATA, 0xF8); /* 1111 1000 */
+    outb(PIC2_DATA, 0xEF); /* 1110 1111 -> IRQ12 (mouse) ligado */
 }
 
 void pic_send_eoi(int irq) {

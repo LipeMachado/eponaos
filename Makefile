@@ -14,18 +14,23 @@ CFLAGS := -std=c17 -ffreestanding -fno-stack-protector -fno-pie -fno-pic \
 KOBJS := $(BUILD)/entry.o $(BUILD)/main.o $(BUILD)/vga.o $(BUILD)/serial.o \
            $(BUILD)/gdt.o $(BUILD)/gdt_flush.o \
            $(BUILD)/idt.o $(BUILD)/isr.o $(BUILD)/isr_stub.o \
-           $(BUILD)/pic.o $(BUILD)/pit.o $(BUILD)/keyboard.o \
-		   $(BUILD)/pmm.o $(BUILD)/string.o
+           $(BUILD)/pic.o $(BUILD)/pit.o $(BUILD)/keyboard.o $(BUILD)/mouse.o \
+		   $(BUILD)/pmm.o $(BUILD)/paging.o $(BUILD)/heap.o $(BUILD)/string.o \
+		   $(BUILD)/scheduler.o $(BUILD)/switch.o $(BUILD)/pci.o $(BUILD)/ata.o \
+		   $(BUILD)/vfs.o $(BUILD)/fat.o $(BUILD)/rtl8139.o $(BUILD)/net.o
 
 STAGE1     := $(BUILD)/stage1.bin
 STAGE2     := $(BUILD)/stage2.bin
 KERNEL_ELF := $(BUILD)/kernel.elf
 KERNEL_BIN := $(BUILD)/kernel.bin
 IMG        := $(BUILD)/eponaos.img
-QEMUFLAGS  := -drive format=raw,file=$(IMG) -serial stdio -no-reboot
+DATA_IMG   := $(BUILD)/data.img
+QEMUFLAGS  := -drive format=raw,file=$(IMG) -drive format=raw,file=$(DATA_IMG) \
+              -netdev user,id=net0 -device rtl8139,netdev=net0 \
+              -serial stdio -no-reboot
 
 .PHONY: all run debug clean format
-all: $(IMG)
+all: $(IMG) $(DATA_IMG)
 
 $(BUILD)/entry.o: kernel/entry.asm | $(BUILD)
 	$(ASM) -f elf64 $< -o $@
@@ -53,8 +58,30 @@ $(BUILD)/pit.o: kernel/pit.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/keyboard.o: drivers/keyboard.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/mouse.o: drivers/mouse.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/pci.o: drivers/pci.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/ata.o: drivers/ata.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/rtl8139.o: drivers/rtl8139.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/net.o: net/net.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/vfs.o: fs/vfs.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/fat.o: fs/fat.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 $(BUILD)/pmm.o: mm/pmm.c | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/paging.o: mm/paging.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/heap.o: mm/heap.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/scheduler.o: kernel/scheduler.c | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/switch.o: kernel/switch.asm | $(BUILD)
+	$(ASM) -f elf64 $< -o $@
 
 $(KERNEL_ELF): $(KOBJS) linker.ld
 	$(CC) -nostdlib -no-pie -T linker.ld -o $@ $(KOBJS) -lgcc
@@ -77,6 +104,14 @@ $(IMG): $(STAGE1) $(STAGE2) $(KERNEL_BIN)
 
 $(BUILD):
 	mkdir -p $(BUILD)
+
+# disco FAT32 com arquivo de teste
+$(DATA_IMG): | $(BUILD)
+	dd if=/dev/zero bs=1M count=4 of=$@ 2>/dev/null
+	mkfs.fat -F 32 $@ >/dev/null 2>&1
+	echo "Hello from EponaOS! FAT32 works!" | mcopy -i $@ - ::HELLO.TXT
+	echo "Another file for listing test." | mcopy -i $@ - ::README.TXT
+	@echo "==> data.img criado (FAT32)"
 
 run: $(IMG)
 	$(QEMU) $(QEMUFLAGS) -d guest_errors

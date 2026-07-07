@@ -5,6 +5,8 @@
 
 #define PS2_CMD   0x64
 #define PS2_DATA  0x60
+#define PS2_OUT_FULL 0x01
+#define PS2_AUX_DATA 0x20
 
 #define MOUSE_CMD_ENABLE  0xF4
 #define MOUSE_CMD_SAMPLE  0xF3
@@ -12,6 +14,8 @@
 
 static int g_mouse_x = 0;
 static int g_mouse_y = 0;
+static uint8_t g_mouse_buttons = 0;
+static int g_mouse_available = 0;
 static uint8_t g_mouse_cycle = 0;
 static uint8_t g_mouse_packet[3];
 
@@ -61,14 +65,21 @@ void mouse_init(void) {
     mouse_send_cmd(MOUSE_CMD_DEFAULTS);
     mouse_send_cmd(MOUSE_CMD_SAMPLE);
     mouse_send_cmd(100);
-    mouse_send_cmd(MOUSE_CMD_ENABLE);
+    if (mouse_send_cmd(MOUSE_CMD_ENABLE) == 0)
+        g_mouse_available = 1;
 
     g_mouse_cycle = 0;
     serial_print("[mouse] ready\n");
 }
 
 void mouse_irq(void) {
-    uint8_t data = inb(PS2_DATA);
+    uint8_t status = inb(PS2_CMD);
+    uint8_t data;
+
+    if (!(status & PS2_OUT_FULL) || !(status & PS2_AUX_DATA))
+        return;
+
+    data = inb(PS2_DATA);
 
     switch (g_mouse_cycle) {
     case 0:
@@ -87,12 +98,24 @@ void mouse_irq(void) {
         g_mouse_packet[2] = data;
         g_mouse_cycle = 0;
 
+        if (g_mouse_packet[0] & 0xC0)
+            break;
+
         int dx = (int) (int8_t) g_mouse_packet[1];
         int dy = (int) (int8_t) g_mouse_packet[2];
-        if (g_mouse_packet[0] & 0x40) dx = -dx;
-        if (g_mouse_packet[0] & 0x80) dy = -dy;
         g_mouse_x += dx;
         g_mouse_y += dy;
+        g_mouse_buttons = g_mouse_packet[0] & 0x07;
         break;
     }
+}
+
+void mouse_get_state(int *x, int *y, uint8_t *buttons) {
+    if (x) *x = g_mouse_x;
+    if (y) *y = g_mouse_y;
+    if (buttons) *buttons = g_mouse_buttons;
+}
+
+int mouse_is_available(void) {
+    return g_mouse_available;
 }

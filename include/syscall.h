@@ -9,16 +9,25 @@
 #define SYS_READ  3
 #define SYS_CLOSE 4
 #define SYS_READDIR 5
+#define SYS_EXEC  6
+#define SYS_CREATE 7
+#define SYS_UNLINK 8
+#define SYS_STAT   9
+#define SYS_PIPE   10
 
 #define FD_STDIN  0
 #define FD_STDOUT 1
 #define FD_STDERR 2
 
 #define FD_MAX 16
+#define FD_TYPE_FILE  1
+#define FD_TYPE_PIPE_R 2
+#define FD_TYPE_PIPE_W 3
 
 typedef struct {
     void *ptr;
     int   used;
+    int   type;
 } fd_entry_t;
 
 void enter_usermode(void *func, void *stack);
@@ -29,7 +38,7 @@ extern uint64_t g_elf_ret_rip;
 extern uint64_t g_elf_ret_rsp;
 extern uint64_t g_kernel_cr3;
 
-int  sys_fd_alloc(void *file_ptr);
+int  sys_fd_alloc(void *ptr, int type);
 void sys_fd_free(int fd);
 void *sys_fd_get(int fd);
 void sys_fd_init(void);

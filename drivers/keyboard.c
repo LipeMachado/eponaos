@@ -3,6 +3,10 @@
 #include <stdint.h>
 
 #define KEYBUF_SIZE 256
+#define PS2_STATUS 0x64
+#define PS2_DATA   0x60
+#define PS2_OUT_FULL 0x01
+#define PS2_AUX_DATA 0x20
 
 static int g_buf[KEYBUF_SIZE];
 static volatile int g_head, g_tail;
@@ -39,8 +43,25 @@ static void put_key(int code) {
     }
 }
 
+static int is_repeatable_scancode(uint8_t sc) {
+    return sc == 0x0E; /* backspace */
+}
+
+static int is_repeatable_ext_scancode(uint8_t sc) {
+    return sc == 0x4B || sc == 0x4D || sc == 0x47 || sc == 0x4F || sc == 0x53;
+}
+
 void keyboard_irq(void) {
-    uint8_t sc = inb(0x60);
+    uint8_t status = inb(PS2_STATUS);
+    uint8_t sc;
+
+    if (!(status & PS2_OUT_FULL)) return;
+    if (status & PS2_AUX_DATA) {
+        (void)inb(PS2_DATA);
+        return;
+    }
+
+    sc = inb(PS2_DATA);
 
     if (sc == 0xE0) {
         g_extended = 1;
@@ -54,7 +75,7 @@ void keyboard_irq(void) {
             g_pressed[code_sc] = 0;
             return;
         }
-        if (g_pressed[code_sc]) return;
+        if (g_pressed[code_sc] && !is_repeatable_ext_scancode(code_sc)) return;
         g_pressed[code_sc] = 1;
 
         int code = g_ext_map[code_sc];
@@ -70,7 +91,7 @@ void keyboard_irq(void) {
         g_pressed[code_sc] = 0;
         return;
     }
-    if (g_pressed[code_sc]) return;
+    if (g_pressed[code_sc] && !is_repeatable_scancode(code_sc)) return;
     g_pressed[code_sc] = 1;
 
     char c = g_shift ? g_map_shift[code_sc] : g_map[code_sc];
@@ -78,8 +99,14 @@ void keyboard_irq(void) {
 }
 
 int keyboard_getc(void) {
-    if (g_head == g_tail && (inb(0x64) & 1))
+    while (g_head == g_tail && (inb(PS2_STATUS) & PS2_OUT_FULL)) {
+        uint8_t status = inb(PS2_STATUS);
+        if (status & PS2_AUX_DATA) {
+            (void)inb(PS2_DATA);
+            continue;
+        }
         keyboard_irq();
+    }
 
     if (g_head == g_tail) return 0;
     int code = g_buf[g_head];

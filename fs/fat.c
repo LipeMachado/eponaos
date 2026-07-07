@@ -19,6 +19,12 @@ typedef struct {
     uint32_t bytes_per_cluster;
 } fat_private_t;
 
+typedef struct {
+    uint32_t cluster;
+    uint32_t dir_lba;
+    uint32_t dir_off;
+} fat_node_data_t;
+
 static fat_private_t *fat_get_private(vfs_node_t *node) {
     return (fat_private_t *) node->fs->private;
 }
@@ -52,30 +58,65 @@ static int fat_set_cluster(fat_private_t *fp, uint32_t cluster, uint32_t value) 
     uint32_t *ent = (uint32_t *)(buf + ent_offset);
     *ent = (*ent & 0xF0000000) | (value & 0x0FFFFFFF);
 
-    if (ata_write_sectors(fp->bus, fp->master, fat_sector, 1, buf) < 0)
-        return -1;
+    for (uint8_t i = 0; i < fp->bpb.fat_count; i++) {
+        uint32_t sector = fp->fat_start + i * fp->sectors_per_fat + fat_offset / fp->bpb.bytes_per_sector;
+        if (ata_write_sectors(fp->bus, fp->master, sector, 1, buf) < 0)
+            return -1;
+    }
 
     return 0;
 }
 
-static vfs_node_t *fat_create_node(const char *name, uint32_t size, uint8_t flags, uint32_t cluster, vfs_filesystem_t *fs, vfs_node_t *parent) {
+static vfs_node_t *fat_create_node(const char *name, uint32_t size, uint8_t flags, uint32_t cluster, uint32_t dir_lba, uint32_t dir_off, vfs_filesystem_t *fs, vfs_node_t *parent) {
     vfs_node_t *node = (vfs_node_t *) kmalloc(sizeof(vfs_node_t));
     if (!node) return NULL;
+
+    fat_node_data_t *data = (fat_node_data_t *) kmalloc(sizeof(fat_node_data_t));
+    if (!data) {
+        kfree(node);
+        return NULL;
+    }
+
+    data->cluster = cluster;
+    data->dir_lba = dir_lba;
+    data->dir_off = dir_off;
 
     strcpy(node->name, name);
     node->size = size;
     node->flags = flags;
     node->fs = fs;
-    node->fs_data = (void *)(uintptr_t) cluster;
+    node->fs_data = data;
     node->parent = parent;
     node->children = NULL;
     node->next = NULL;
     return node;
 }
 
+static uint32_t fat_node_cluster(vfs_node_t *node) {
+    fat_node_data_t *data = (fat_node_data_t *) node->fs_data;
+    return data ? data->cluster : 0;
+}
+
+static int fat_update_dirent_size(vfs_node_t *node) {
+    fat_private_t *fp = fat_get_private(node);
+    fat_node_data_t *data = (fat_node_data_t *) node->fs_data;
+    if (!data || data->dir_lba == 0) return 0;
+
+    uint8_t buf[512];
+    if (ata_read_sectors(fp->bus, fp->master, data->dir_lba, 1, buf) < 0)
+        return -1;
+
+    fat_dirent_t *de = (fat_dirent_t *)(buf + data->dir_off);
+    de->size = node->size;
+    de->cluster_hi = (uint16_t)(data->cluster >> 16);
+    de->cluster_lo = (uint16_t)(data->cluster & 0xFFFF);
+
+    return ata_write_sectors(fp->bus, fp->master, data->dir_lba, 1, buf);
+}
+
 static int fat_read(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf) {
     fat_private_t *fp = fat_get_private(node);
-    uint32_t cluster = (uint32_t)(uintptr_t) node->fs_data;
+    uint32_t cluster = fat_node_cluster(node);
 
     uint32_t cluster_size = fp->bytes_per_cluster;
     uint8_t *out = (uint8_t *) buf;
@@ -155,13 +196,15 @@ static uint32_t fat_total_clusters(fat_private_t *fp) {
 static uint32_t fat_alloc_cluster(fat_private_t *fp) {
     uint32_t total = fat_total_clusters(fp);
     uint8_t buf[512];
+    uint32_t loaded_sector = 0xFFFFFFFF;
     for (uint32_t c = 2; c < total + 2; c++) {
         uint32_t fat_offset = c * 4;
         uint32_t fat_sector = fp->fat_start + fat_offset / 512;
         uint32_t ent_off = fat_offset % 512;
-        if (ent_off == 0) {
+        if (fat_sector != loaded_sector) {
             if (ata_read_sectors(fp->bus, fp->master, fat_sector, 1, buf) < 0)
                 return 0;
+            loaded_sector = fat_sector;
         }
         uint32_t val = *(uint32_t *)(buf + ent_off) & 0x0FFFFFFF;
         if (val == 0) {
@@ -174,7 +217,7 @@ static uint32_t fat_alloc_cluster(fat_private_t *fp) {
 
 static int fat_write(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf) {
     fat_private_t *fp = fat_get_private(node);
-    uint32_t cluster = (uint32_t)(uintptr_t) node->fs_data;
+    uint32_t cluster = fat_node_cluster(node);
     uint32_t cluster_size = fp->bytes_per_cluster;
     uint8_t *in = (uint8_t *) buf;
     uint64_t done = 0;
@@ -187,7 +230,12 @@ static int fat_write(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf
         if (next >= FAT_EOC || next == 0) {
             next = fat_alloc_cluster(fp);
             if (!next) return (int)done;
-            fat_set_cluster(fp, cluster, next);
+            if (cluster)
+                fat_set_cluster(fp, cluster, next);
+            else {
+                fat_node_data_t *data = (fat_node_data_t *) node->fs_data;
+                data->cluster = next;
+            }
         }
         cluster = next;
         skip -= cluster_size;
@@ -235,12 +283,14 @@ static int fat_write(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf
     if (offset + done > node->size)
         node->size = (uint32_t)(offset + done);
 
+    fat_update_dirent_size(node);
+
     return (int)done;
 }
 
 static int fat_readdir(vfs_node_t *node, int (*cb)(const char *, uint32_t, uint8_t, void *), void *arg) {
     fat_private_t *fp = fat_get_private(node);
-    uint32_t cluster = (uint32_t)(uintptr_t) node->fs_data;
+    uint32_t cluster = fat_node_cluster(node);
 
     uint8_t buf[512];
     int entry_count = 0;
@@ -279,7 +329,7 @@ static int fat_readdir(vfs_node_t *node, int (*cb)(const char *, uint32_t, uint8
 
             uint8_t flags = (de->attrs & FAT_ATTR_DIR) ? VFS_DIR : VFS_FILE;
 
-            vfs_node_t *child = fat_create_node(name, de->size, flags, de_cluster, node->fs, node);
+            vfs_node_t *child = fat_create_node(name, de->size, flags, de_cluster, lba + sector, off, node->fs, node);
             if (!child) continue;
 
             child->next = node->children;
@@ -292,6 +342,175 @@ static int fat_readdir(vfs_node_t *node, int (*cb)(const char *, uint32_t, uint8
     }
 done:
     return entry_count;
+}
+
+static int fat_name_to_83(const char *name, char out_name[8], char out_ext[3]) {
+    for (int i = 0; i < 8; i++) out_name[i] = ' ';
+    for (int i = 0; i < 3; i++) out_ext[i] = ' ';
+
+    int ni = 0;
+    int ei = 0;
+    int ext = 0;
+
+    for (int i = 0; name[i]; i++) {
+        char c = name[i];
+        if (c == '.') {
+            if (ext) return -1;
+            ext = 1;
+            continue;
+        }
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        if (!((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
+            return -1;
+        if (!ext) {
+            if (ni >= 8) return -1;
+            out_name[ni++] = c;
+        } else {
+            if (ei >= 3) return -1;
+            out_ext[ei++] = c;
+        }
+    }
+
+    return ni > 0 ? 0 : -1;
+}
+
+static vfs_node_t *fat_create(vfs_node_t *parent, const char *name, uint8_t flags) {
+    if (!(flags & VFS_FILE)) return NULL;
+
+    fat_private_t *fp = fat_get_private(parent);
+    uint32_t cluster = fat_node_cluster(parent);
+    char fat_name[8], fat_ext[3];
+    if (fat_name_to_83(name, fat_name, fat_ext) < 0)
+        return NULL;
+
+    uint8_t buf[512];
+    while (cluster < FAT_EOC) {
+        uint32_t lba = fat_cluster_to_lba(fp, cluster);
+        uint32_t entries_per_cluster = fp->bytes_per_cluster / 32;
+
+        for (uint32_t e = 0; e < entries_per_cluster; e++) {
+            uint32_t sector = (e * 32) / 512;
+            uint32_t off = (e * 32) % 512;
+
+            if (sector == 0 || off == 0) {
+                if (ata_read_sectors(fp->bus, fp->master, lba + sector, 1, buf) < 0)
+                    return NULL;
+            }
+
+            fat_dirent_t *de = (fat_dirent_t *)(buf + off);
+            if (de->name[0] != 0 && (uint8_t)de->name[0] != 0xE5)
+                continue;
+
+            uint32_t file_cluster = fat_alloc_cluster(fp);
+            if (!file_cluster) return NULL;
+
+            uint8_t zero[512];
+            memset(zero, 0, sizeof(zero));
+            uint32_t file_lba = fat_cluster_to_lba(fp, file_cluster);
+            for (uint8_t s = 0; s < fp->bpb.sectors_per_cluster; s++)
+                ata_write_sectors(fp->bus, fp->master, file_lba + s, 1, zero);
+
+            memcpy(de->name, fat_name, 8);
+            memcpy(de->ext, fat_ext, 3);
+            de->attrs = FAT_ATTR_ARCHIVE;
+            de->reserved = 0;
+            de->ctime_ms = 0;
+            de->ctime = 0;
+            de->cdate = 0;
+            de->adate = 0;
+            de->cluster_hi = (uint16_t)(file_cluster >> 16);
+            de->mtime = 0;
+            de->mdate = 0;
+            de->cluster_lo = (uint16_t)(file_cluster & 0xFFFF);
+            de->size = 0;
+
+            if (ata_write_sectors(fp->bus, fp->master, lba + sector, 1, buf) < 0)
+                return NULL;
+
+            vfs_node_t *child = fat_create_node(name, 0, VFS_FILE, file_cluster, lba + sector, off, parent->fs, parent);
+            if (!child) return NULL;
+            child->next = parent->children;
+            parent->children = child;
+            return child;
+        }
+        cluster = fat_next_cluster(fp, cluster);
+    }
+
+    return NULL;
+}
+
+static void fat_free_cluster_chain(fat_private_t *fp, uint32_t cluster) {
+    while (cluster >= 2 && cluster < FAT_EOC) {
+        uint32_t next = fat_next_cluster(fp, cluster);
+        fat_set_cluster(fp, cluster, 0);
+        cluster = next;
+    }
+}
+
+static int fat_unlink(vfs_node_t *parent, const char *name) {
+    fat_private_t *fp = fat_get_private(parent);
+    uint32_t cluster = fat_node_cluster(parent);
+    char fat_name[8], fat_ext[3];
+    if (fat_name_to_83(name, fat_name, fat_ext) < 0)
+        return -1;
+
+    uint8_t buf[512];
+    while (cluster < FAT_EOC) {
+        uint32_t lba = fat_cluster_to_lba(fp, cluster);
+        uint32_t entries_per_cluster = fp->bytes_per_cluster / 32;
+
+        for (uint32_t e = 0; e < entries_per_cluster; e++) {
+            uint32_t sector = (e * 32) / 512;
+            uint32_t off = (e * 32) % 512;
+
+            if (sector == 0 || off == 0) {
+                if (ata_read_sectors(fp->bus, fp->master, lba + sector, 1, buf) < 0)
+                    return -1;
+            }
+
+            fat_dirent_t *de = (fat_dirent_t *)(buf + off);
+
+            if (de->name[0] == 0) {
+                if (ata_write_sectors(fp->bus, fp->master, lba + sector, 1, buf) < 0)
+                    return -1;
+                return -1;
+            }
+
+            if ((uint8_t) de->name[0] == 0xE5)
+                continue;
+
+            if (de->attrs == FAT_ATTR_LFN)
+                continue;
+
+            if (de->attrs & FAT_ATTR_VOLUME)
+                continue;
+
+            int match = 1;
+            for (int i = 0; i < 8; i++) {
+                if (de->name[i] != fat_name[i]) { match = 0; break; }
+            }
+            if (match) {
+                for (int i = 0; i < 3; i++) {
+                    if (de->ext[i] != fat_ext[i]) { match = 0; break; }
+                }
+            }
+            if (!match) continue;
+
+            uint32_t file_cluster = ((uint32_t) de->cluster_hi << 16) | de->cluster_lo;
+            de->name[0] = (char)0xE5;
+
+            if (ata_write_sectors(fp->bus, fp->master, lba + sector, 1, buf) < 0)
+                return -1;
+
+            if (file_cluster >= 2 && file_cluster < FAT_EOC)
+                fat_free_cluster_chain(fp, file_cluster);
+
+            return 0;
+        }
+        cluster = fat_next_cluster(fp, cluster);
+    }
+
+    return -1;
 }
 
 vfs_filesystem_t *fat_mount(int bus, int master, int partition) {
@@ -363,9 +582,11 @@ vfs_filesystem_t *fat_mount(int bus, int master, int partition) {
     fs->read = fat_read;
     fs->write = fat_write;
     fs->readdir = fat_readdir;
+    fs->create = fat_create;
+    fs->unlink = fat_unlink;
 
     serial_print("[fat] creating root node...\n");
-    fs->root = fat_create_node("/", 0, VFS_DIR, fp->root_cluster, fs, NULL);
+    fs->root = fat_create_node("/", 0, VFS_DIR, fp->root_cluster, 0, 0, fs, NULL);
     fs->private = fp;
 
     serial_print("[fat] mounted OK\n");

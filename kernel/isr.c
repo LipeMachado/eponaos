@@ -1,5 +1,5 @@
 #include "serial.h"
-#include "vga.h"
+#include "gpu.h"
 #include <stdint.h>
 #include "keyboard.h"
 #include "mouse.h"
@@ -54,16 +54,16 @@ static uint64_t read_cr2(void) {
 }
 
 void isr_handler(struct regs *r) {
-    vga_set_color(0x0C, 0x00);
-    vga_print("\n[EXCECAO] ");
+    gpu_set_color(0x0C, 0x00);
+    gpu_print("\n[EXCECAO] ");
     if (r->vector < 32)
-        vga_print(g_exc_names[r->vector]);
+        gpu_print(g_exc_names[r->vector]);
     if (r->vector == 14) {
-        vga_print(" addr=");
+        gpu_print(" addr=");
         /* can't use print_u64 from here, use serial */
     }
-    vga_print("\n");
-    vga_set_color(0x0F, 0x00);
+    gpu_print("\n");
+    gpu_set_color(0x0F, 0x00);
 
     serial_print("[EXCECAO] ");
     if (r->vector < 32)
@@ -106,6 +106,7 @@ void irq_handler(struct regs *r) {
     int irq = (int) r->vector - 32;
     if (irq == 0) {
         pit_tick();
+        scheduler_tick();
         pic_send_eoi(irq);
         schedule();
         return;

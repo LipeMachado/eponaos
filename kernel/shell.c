@@ -1,6 +1,6 @@
 #include "shell.h"
 #include "keyboard.h"
-#include "vga.h"
+#include "gpu.h"
 #include "serial.h"
 #include "pmm.h"
 #include "net.h"
@@ -8,6 +8,7 @@
 #include "string.h"
 #include "elf.h"
 #include "syscall.h"
+#include "gui.h"
 #include <stdint.h>
 
 #define LINE_MAX 256
@@ -17,15 +18,22 @@
 static char g_history[HIST_MAX][LINE_MAX];
 static int g_hist_count, g_hist_idx;
 
+static int ends_with(const char *s, const char *suffix) {
+    size_t sl = strlen(s);
+    size_t sul = strlen(suffix);
+    if (sul > sl) return 0;
+    return strcmp(s + sl - sul, suffix) == 0;
+}
+
 static void print_prompt(void) {
-    vga_set_color(0x0A, 0x00);
-    vga_print("epona@epona");
-    vga_set_color(0x0F, 0x00);
-    vga_print(":");
-    vga_set_color(0x0B, 0x00);
-    vga_print("~");
-    vga_set_color(0x0F, 0x00);
-    vga_print("$ ");
+    gpu_set_color(0x0A, 0x00);
+    gpu_print("epona@epona");
+    gpu_set_color(0x0F, 0x00);
+    gpu_print(":");
+    gpu_set_color(0x0B, 0x00);
+    gpu_print("~");
+    gpu_set_color(0x0F, 0x00);
+    gpu_print("$ ");
 }
 
 /* re-desenha a linha: \r + prompt + buf + limpa resto + \r + prompt + cursor */
@@ -33,16 +41,16 @@ static void redraw_line(const char *buf, int pos, int cpos) {
     (void)pos;
     int plen = (int) strlen(buf);
     int pcols = 15;
-    vga_print("\r");
+    gpu_print("\r");
     print_prompt();
     for (int i = 0; i < plen; i++)
-        vga_putc(buf[i]);
+        gpu_putc(buf[i]);
     for (int i = pcols + plen; i < 79; i++)
-        vga_putc(' ');
-    vga_print("\r");
+        gpu_putc(' ');
+    gpu_print("\r");
     print_prompt();
     for (int i = 0; i < cpos; i++)
-        vga_putc(buf[i]);
+        gpu_putc(buf[i]);
 }
 
 /* insere ch em buf[pos], desloca resto para direita */
@@ -100,7 +108,7 @@ static void readline(char *buf, int max) {
         if (!c) continue;
 
         if (c == '\n') {
-            vga_putc('\n');
+            gpu_putc('\n');
             buf[pos] = '\0';
             return;
         }
@@ -171,8 +179,8 @@ static void print_ip(uint32_t ip) {
         if (n >= 10)  buf[i++] = (char)('0' + (n / 10) % 10);
         buf[i++] = (char)('0' + n % 10);
         buf[i] = 0;
-        vga_print(buf);
-        if (part < 3) vga_print(".");
+        gpu_print(buf);
+        if (part < 3) gpu_print(".");
     }
 }
 
@@ -185,7 +193,7 @@ static void print_u64(uint64_t v) {
         buf[--i] = (char)('0' + v % 10);
         v /= 10;
     }
-    vga_print(&buf[i]);
+    gpu_print(&buf[i]);
 }
 
 static int parse_ip(const char *s, uint32_t *out) {
@@ -220,104 +228,118 @@ static int tokenize(char *line, char **tokens, int max) {
 }
 
 static void cmd_help(void) {
-    vga_print("Comandos:\n");
-    vga_print("  help              ajuda\n");
-    vga_print("  clear             limpa tela\n");
-    vga_print("  neofetch          info do sistema\n");
-    vga_print("  ip                config de rede\n");
-    vga_print("  http              status HTTP\n");
-    vga_print("  ls                lista arquivos\n");
-    vga_print("  cat <arquivo>     le arquivo\n");
-    vga_print("  echo <texto>      ecoa texto\n");
-    vga_print("  ping <ip>         ping ICMP\n");
-    vga_print("  dns <host>        consulta DNS\n");
-    vga_print("  fetch <host>      HTTP GET\n");
-    vga_print("  run <elf>         executa ELF\n");
+    gpu_print("Comandos:\n");
+    gpu_print("  help              ajuda\n");
+    gpu_print("  clear             limpa tela\n");
+    gpu_print("  gpuinfo           info do framebuffer\n");
+    gpu_print("  gui               preview da interface grafica\n");
+    gpu_print("  neofetch          info do sistema\n");
+    gpu_print("  ip                config de rede\n");
+    gpu_print("  http              status HTTP\n");
+    gpu_print("  ls                lista arquivos\n");
+    gpu_print("  cat <arquivo>     le arquivo\n");
+    gpu_print("  echo <texto>      ecoa texto\n");
+    gpu_print("  ping <ip>         ping ICMP\n");
+    gpu_print("  dns <host>        consulta DNS\n");
+    gpu_print("  fetch <host>      HTTP GET\n");
+    gpu_print("  run <elf>         executa ELF\n");
 }
 
 static void cmd_clear(void) {
-    vga_clear(0x0F, 0x00);
+    gpu_clear(0x0F, 0x00);
+}
+
+static void cmd_gpuinfo(void) {
+    gpu_print("GPU: ");
+    gpu_print(gpu_is_framebuffer_enabled() ? "framebuffer VBE\n" : "VGA text mode\n");
+    gpu_print("Resolucao: ");
+    print_u64(gpu_width());
+    gpu_print("x");
+    print_u64(gpu_height());
+    gpu_print("x");
+    print_u64(gpu_bpp());
+    gpu_print("\n");
 }
 
 static void cmd_neofetch(void) {
-    vga_set_color(0x0B, 0x00);
-    vga_print("          //\n");
-    vga_print("         //\n");
-    vga_print("        //\n");
-    vga_print("       //\n");
-    vga_print("      //\n");
-    vga_print("     //\n");
-    vga_print("    //\n");
-    vga_print("   //\n");
-    vga_print("  //\n");
-    vga_print(" //\n");
-    vga_print("////////////////////////////////////////////////////\n");
-    vga_set_color(0x0F, 0x00);
+    gpu_set_color(0x0B, 0x00);
+    gpu_print("          //\n");
+    gpu_print("         //\n");
+    gpu_print("        //\n");
+    gpu_print("       //\n");
+    gpu_print("      //\n");
+    gpu_print("     //\n");
+    gpu_print("    //\n");
+    gpu_print("   //\n");
+    gpu_print("  //\n");
+    gpu_print(" //\n");
+    gpu_print("////////////////////////////////////////////////////\n");
+    gpu_set_color(0x0F, 0x00);
 
-    vga_print("SO:         EponaOS 0.1 x86_64\n");
-    vga_print("Kernel:     Epona\n");
-    vga_print("Shell:      epona-sh\n");
+    gpu_print("SO:         EponaOS 0.1 x86_64\n");
+    gpu_print("Kernel:     Epona\n");
+    gpu_print("Shell:      epona-sh\n");
 
-    vga_print("Memoria:    ");
+    gpu_print("Memoria:    ");
     print_u64(pmm_total_bytes() / (1024 * 1024));
-    vga_print(" MiB (");
+    gpu_print(" MiB (");
     print_u64(pmm_free_bytes() / (1024 * 1024));
-    vga_print(" MiB livre)\n");
+    gpu_print(" MiB livre)\n");
 
     if (net_is_configured()) {
-        vga_set_color(0x0A, 0x00);
-        vga_print("Rede:       conectada (");
+        gpu_set_color(0x0A, 0x00);
+        gpu_print("Rede:       conectada (");
         print_ip(net_local_ip());
-        vga_print(")\n");
-        vga_set_color(0x0F, 0x00);
+        gpu_print(")\n");
+        gpu_set_color(0x0F, 0x00);
     } else {
-        vga_set_color(0x0C, 0x00);
-        vga_print("Rede:       desconectada\n");
-        vga_set_color(0x0F, 0x00);
+        gpu_set_color(0x0C, 0x00);
+        gpu_print("Rede:       desconectada\n");
+        gpu_set_color(0x0F, 0x00);
     }
 
     if (net_dns_answer_ip()) {
-        vga_print("DNS:        example.com = ");
+        gpu_print("DNS:        example.com = ");
         print_ip(net_dns_answer_ip());
-        vga_print("\n");
+        gpu_print("\n");
     }
-    vga_print("Terminal:   VGA text-mode 80x25\n");
+    gpu_print("Terminal:   VGA text-mode 80x25\n");
 }
 
 static void cmd_ip(void) {
     if (!net_is_configured()) {
-        vga_print("Rede nao configurada\n");
+        gpu_print("Rede nao configurada\n");
         return;
     }
-    vga_print("IP:         ");
+    gpu_print("IP:         ");
     print_ip(net_local_ip());
-    vga_print("\n");
+    gpu_print("\n");
     if (net_dns_answer_ip()) {
-        vga_print("DNS:        example.com = ");
+        gpu_print("DNS:        example.com = ");
         print_ip(net_dns_answer_ip());
-        vga_print("\n");
+        gpu_print("\n");
     }
 }
 
 static void cmd_http(void) {
-    vga_print("HTTP: ");
+    gpu_print("HTTP: ");
     if (net_http_ok()) {
-        vga_set_color(0x0A, 0x00);
-        vga_print("OK");
+        gpu_set_color(0x0A, 0x00);
+        gpu_print("OK");
     } else {
-        vga_set_color(0x0C, 0x00);
-        vga_print("sem resposta");
+        gpu_set_color(0x0C, 0x00);
+        gpu_print("sem resposta");
     }
-    vga_set_color(0x0F, 0x00);
-    vga_print("\n");
+    gpu_set_color(0x0F, 0x00);
+    gpu_print("\n");
 
     uint32_t len = net_http_body_len();
     if (len > 0) {
-        vga_print("Bytes:      ");
+        gpu_print("Bytes:      ");
         print_u64(len);
-        vga_print("\nPreview:    ");
-        vga_print(net_http_body_preview());
-        vga_print("\n");
+        gpu_print("\nPreview:    ");
+        gpu_print(net_http_body_preview());
+        gpu_print("\n");
     }
 }
 
@@ -325,17 +347,17 @@ struct ls_ctx { int count; };
 
 static int ls_cb(const char *name, uint32_t size, uint8_t flags, void *arg) {
     struct ls_ctx *ctx = (struct ls_ctx *) arg;
-    vga_print("  ");
+    gpu_print("  ");
     if (flags & VFS_DIR)
-        vga_set_color(0x0B, 0x00);
-    vga_print(name);
-    vga_set_color(0x0F, 0x00);
+        gpu_set_color(0x0B, 0x00);
+    gpu_print(name);
+    gpu_set_color(0x0F, 0x00);
     if (!(flags & VFS_DIR)) {
-        vga_print(" (");
+        gpu_print(" (");
         print_u64(size);
-        vga_print(" bytes)");
+        gpu_print(" bytes)");
     }
-    vga_print("\n");
+    gpu_print("\n");
     ctx->count++;
     return 0;
 }
@@ -343,9 +365,9 @@ static int ls_cb(const char *name, uint32_t size, uint8_t flags, void *arg) {
 static void cmd_ls(void) {
     struct ls_ctx ctx;
     ctx.count = 0;
-    vga_print("/:\n");
+    gpu_print("/:\n");
     vfs_readdir("/", ls_cb, &ctx);
-    if (ctx.count == 0) vga_print("  (vazio)\n");
+    if (ctx.count == 0) gpu_print("  (vazio)\n");
 }
 
 static void cmd_cat(const char *path) {
@@ -358,106 +380,113 @@ static void cmd_cat(const char *path) {
 
     file_t *f = vfs_open(full);
     if (!f) {
-        vga_print("Arquivo nao encontrado: ");
-        vga_print(path);
-        vga_print("\n");
+        gpu_print("Arquivo nao encontrado: ");
+        gpu_print(path);
+        gpu_print("\n");
         return;
     }
     char buf[256];
     int n = vfs_read(f, 255, buf);
     if (n > 0) {
         buf[n] = 0;
-        vga_print(buf);
-        if (buf[n - 1] != '\n') vga_print("\n");
+        gpu_print(buf);
+        if (buf[n - 1] != '\n') gpu_print("\n");
     }
     vfs_close(f);
 }
 
 static void cmd_echo(char **args, int argc) {
     for (int i = 1; i < argc; i++) {
-        if (i > 1) vga_print(" ");
-        vga_print(args[i]);
+        if (i > 1) gpu_print(" ");
+        gpu_print(args[i]);
     }
-    vga_print("\n");
+    gpu_print("\n");
 }
 
 static void cmd_ping(char **args, int argc) {
-    if (argc < 2) { vga_print("Uso: ping <ip>\n"); return; }
-    if (!net_is_configured()) { vga_print("Rede nao configurada\n"); return; }
+    if (argc < 2) { gpu_print("Uso: ping <ip>\n"); return; }
+    if (!net_is_configured()) { gpu_print("Rede nao configurada\n"); return; }
     uint32_t ip;
-    if (parse_ip(args[1], &ip) < 0) { vga_print("IP invalido\n"); return; }
-    vga_print("Pinging "); print_ip(ip); vga_print("...\n");
+    if (parse_ip(args[1], &ip) < 0) { gpu_print("IP invalido\n"); return; }
+    gpu_print("Pinging "); print_ip(ip); gpu_print("...\n");
 
     net_ping_send(ip);
     for (int i = 0; i < 2000000; i++) {
         net_poll();
         if (net_ping_replied()) {
-            vga_set_color(0x0A, 0x00);
-            vga_print("Resposta recebida!\n");
-            vga_set_color(0x0F, 0x00);
+            gpu_set_color(0x0A, 0x00);
+            gpu_print("Resposta recebida!\n");
+            gpu_set_color(0x0F, 0x00);
             return;
         }
     }
-    vga_set_color(0x0C, 0x00);
-    vga_print("Sem resposta (timeout)\n");
-    vga_set_color(0x0F, 0x00);
+    gpu_set_color(0x0C, 0x00);
+    gpu_print("Sem resposta (timeout)\n");
+    gpu_set_color(0x0F, 0x00);
 }
 
 static void cmd_dns(char **args, int argc) {
-    if (argc < 2) { vga_print("Uso: dns <host>\n"); return; }
-    if (!net_is_configured()) { vga_print("Rede nao configurada\n"); return; }
-    vga_print("Resolvendo: "); vga_print(args[1]); vga_print("\n");
+    if (argc < 2) { gpu_print("Uso: dns <host>\n"); return; }
+    if (!net_is_configured()) { gpu_print("Rede nao configurada\n"); return; }
+    gpu_print("Resolvendo: "); gpu_print(args[1]); gpu_print("\n");
 
     dns_query(args[1]);
     for (int i = 0; i < 3000000; i++) {
         net_poll();
         uint32_t ip = net_dns_answer_ip();
-        if (ip) { vga_print("Resposta: "); print_ip(ip); vga_print("\n"); return; }
+        if (ip) { gpu_print("Resposta: "); print_ip(ip); gpu_print("\n"); return; }
     }
-    vga_set_color(0x0C, 0x00);
-    vga_print("Timeout\n");
-    vga_set_color(0x0F, 0x00);
+    gpu_set_color(0x0C, 0x00);
+    gpu_print("Timeout\n");
+    gpu_set_color(0x0F, 0x00);
 }
 
 static void cmd_fetch(char **args, int argc) {
-    if (argc < 2) { vga_print("Uso: fetch <host>\n"); return; }
-    if (!net_is_configured()) { vga_print("Rede nao configurada\n"); return; }
-    vga_print("Buscando: "); vga_print(args[1]); vga_print("\n");
+    if (argc < 2) { gpu_print("Uso: fetch <host>\n"); return; }
+    if (!net_is_configured()) { gpu_print("Rede nao configurada\n"); return; }
+    gpu_print("Buscando: "); gpu_print(args[1]); gpu_print("\n");
 
-    if (net_http_fetch(args[1]) < 0) { vga_print("Erro\n"); return; }
+    if (net_http_fetch(args[1]) < 0) { gpu_print("Erro\n"); return; }
     for (int i = 0; i < 5000000; i++) {
         net_poll();
         if (net_tcp_busy()) continue;
         if (net_http_ok()) {
-            vga_set_color(0x0A, 0x00);
-            vga_print("HTTP 200 OK\n");
-            vga_set_color(0x0F, 0x00);
-            vga_print("Bytes: "); print_u64(net_http_body_len()); vga_print("\n");
-            vga_print("Preview: "); vga_print(net_http_body_preview()); vga_print("\n");
+            gpu_set_color(0x0A, 0x00);
+            gpu_print("HTTP 200 OK\n");
+            gpu_set_color(0x0F, 0x00);
+            gpu_print("Bytes: "); print_u64(net_http_body_len()); gpu_print("\n");
+            gpu_print("Preview: "); gpu_print(net_http_body_preview()); gpu_print("\n");
             return;
         }
         if (!net_tcp_busy() && i > 100000) {
-            vga_set_color(0x0C, 0x00);
-            vga_print("Falha\n");
-            vga_set_color(0x0F, 0x00);
+            gpu_set_color(0x0C, 0x00);
+            gpu_print("Falha\n");
+            gpu_set_color(0x0F, 0x00);
             return;
         }
     }
-    vga_set_color(0x0C, 0x00);
-    vga_print("Timeout\n");
-    vga_set_color(0x0F, 0x00);
+    gpu_set_color(0x0C, 0x00);
+    gpu_print("Timeout\n");
+    gpu_set_color(0x0F, 0x00);
 }
 
 static void cmd_run(char **args, int argc) {
-    if (argc < 2) { vga_print("Uso: run <elf>\n"); return; }
+    if (argc < 2) { gpu_print("Uso: run <elf>\n"); return; }
 
-    uint64_t entry, stack_top, pml4;
-    if (elf_load(args[1], &entry, &stack_top, &pml4) < 0) {
-        vga_print("Falha ao carregar ELF\n");
+    if (ends_with(args[1], ".epk")) {
+        gpu_print("Pacotes .epk nao sao executaveis ELF. Use: run shell.elf\n");
         return;
     }
 
-    vga_print("Executando ELF...\n");
+    uint64_t entry, stack_top, pml4;
+    if (elf_load(args[1], &entry, &stack_top, &pml4) < 0) {
+        gpu_print("Falha ao carregar ELF: ");
+        gpu_print(args[1]);
+        gpu_print("\n");
+        return;
+    }
+
+    gpu_print("Executando ELF...\n");
     enter_usermode_save_ret((void*)entry, (void*)stack_top, (void*)pml4);
 }
 
@@ -480,6 +509,10 @@ void shell_run(void) {
             cmd_help();
         } else if (strcmp(cmd, "clear") == 0) {
             cmd_clear();
+        } else if (strcmp(cmd, "gpuinfo") == 0) {
+            cmd_gpuinfo();
+        } else if (strcmp(cmd, "gui") == 0) {
+            gui_run_desktop();
         } else if (strcmp(cmd, "neofetch") == 0) {
             cmd_neofetch();
         } else if (strcmp(cmd, "ip") == 0) {
@@ -501,11 +534,11 @@ void shell_run(void) {
         } else if (strcmp(cmd, "run") == 0) {
             cmd_run(tokens, argc);
         } else {
-            vga_set_color(0x0C, 0x00);
-            vga_print("Comando nao encontrado: ");
-            vga_set_color(0x0F, 0x00);
-            vga_print(cmd);
-            vga_print("\n");
+            gpu_set_color(0x0C, 0x00);
+            gpu_print("Comando nao encontrado: ");
+            gpu_set_color(0x0F, 0x00);
+            gpu_print(cmd);
+            gpu_print("\n");
         }
     }
 }

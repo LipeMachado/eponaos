@@ -6,6 +6,12 @@ extern syscall_handler_c
 extern g_elf_ret_rip
 extern g_elf_ret_rsp
 extern g_kernel_cr3
+extern g_elf_saved_rbx
+extern g_elf_saved_rbp
+extern g_elf_saved_r12
+extern g_elf_saved_r13
+extern g_elf_saved_r14
+extern g_elf_saved_r15
 
 ; void enter_usermode(void *func, void *stack)
 ; RDI = ponteiro da funcao ring 3
@@ -14,7 +20,7 @@ global enter_usermode
 enter_usermode:
     push 0x23          ; SS = user data | RPL 3
     push rsi           ; RSP = user stack top
-    push 0x2           ; RFLAGS = IF clear while user ELF runs outside scheduler
+    push 0x202         ; RFLAGS = IF set -> ring3 preemptivel pelo scheduler (bit1 sempre 1)
     push 0x1B          ; CS = user code | RPL 3
     push rdi           ; RIP = funcao
     xor rax, rax
@@ -84,6 +90,12 @@ int80_stub:
     mov rax, [g_kernel_cr3]
     mov cr3, rax
     mov rsp, [g_elf_ret_rsp]
+    mov rbx, [g_elf_saved_rbx]
+    mov rbp, [g_elf_saved_rbp]
+    mov r12, [g_elf_saved_r12]
+    mov r13, [g_elf_saved_r13]
+    mov r14, [g_elf_saved_r14]
+    mov r15, [g_elf_saved_r15]
     mov rax, [g_elf_ret_rip]
     mov qword [g_elf_ret_rip], 0
     sti
@@ -126,6 +138,16 @@ enter_usermode_save_ret:
     mov [g_elf_ret_rip], rax
     mov [g_elf_ret_rsp], rsp
     push rax                   ; restore stack for enter_usermode
+
+    ; preserva os callee-saved do lado kernel: o programa ring3 pode
+    ; usar rbx/rbp/r12-r15 livremente, entao precisamos deles de volta
+    ; intactos quando retornarmos para cmd_run() via .return_to_kernel
+    mov [g_elf_saved_rbx], rbx
+    mov [g_elf_saved_rbp], rbp
+    mov [g_elf_saved_r12], r12
+    mov [g_elf_saved_r13], r13
+    mov [g_elf_saved_r14], r14
+    mov [g_elf_saved_r15], r15
 
     mov rax, cr3
     mov [g_kernel_cr3], rax

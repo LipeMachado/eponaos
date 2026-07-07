@@ -34,7 +34,7 @@ static void pci_read_header(uint8_t bus, uint8_t dev, uint8_t func, pci_header_t
 }
 
 static void pci_check_func(uint8_t bus, uint8_t dev, uint8_t func) {
-    pci_header_t h;
+    pci_header_t h = {0};
     pci_read_header(bus, dev, func, &h);
     if (h.vendor_id == PCI_VENDOR_NONE)
         return;
@@ -62,7 +62,7 @@ static void pci_check_func(uint8_t bus, uint8_t dev, uint8_t func) {
 }
 
 static void pci_check_device(uint8_t bus, uint8_t dev) {
-    pci_header_t h;
+    pci_header_t h = {0};
     pci_read_header(bus, dev, 0, &h);
     if (h.vendor_id == PCI_VENDOR_NONE)
         return;
@@ -83,7 +83,7 @@ void pci_enumerate(void) {
     serial_print("[pci] enumerating...\n");
     g_pci_count = 0;
 
-    pci_header_t h;
+    pci_header_t h = {0};
     pci_read_header(0, 0, 0, &h);
     if (h.header_type & 0x80) {
         for (int func = 0; func < 8; func++) {

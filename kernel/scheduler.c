@@ -1,8 +1,14 @@
 #include "scheduler.h"
 #include "pmm.h"
-#include "vga.h"
+#include "gpu.h"
 #include "serial.h"
+#include "pit.h"
 #include <stddef.h>
+
+/* CR3 (PML4 fisico) do proprio kernel, capturado uma vez no boot antes de
+ * qualquer processo ring-3 existir. Usado como "endereco padrao" para
+ * qualquer task com cr3 == 0 (thread kernel pura). Definido em syscall.c. */
+extern uint64_t g_kernel_cr3;
 
 static task_struct_t *g_current = NULL;
 static uint32_t g_next_pid = 1;
@@ -29,6 +35,7 @@ uint32_t task_create(void (*entry)(void)) {
     task->pid   = g_next_pid++;
     task->state = TASK_READY;
     task->rsp   = stack_top;
+    task->cr3   = 0; /* 0 = roda no espaco de enderecos do kernel */
     task->entry = entry;
     task->next  = NULL;
 
@@ -64,11 +71,44 @@ void schedule(void) {
     next->state = TASK_RUNNING;
     g_current   = next;
 
-    context_switch(&prev->rsp, next->rsp);
+    /* Cada task pode estar rodando sob um CR3 diferente (ex: um processo
+     * ring-3 interrompido por IRQ no meio da execucao). Salva o CR3 ao vivo
+     * (o que estava ativo no exato momento desta troca) na task que esta
+     * saindo, e restaura o CR3 da task que esta entrando antes do switch
+     * de pilha propriamente dito. cr3 == 0 significa "kernel padrao". */
+    uint64_t next_rsp = next->rsp;
+    uint64_t next_cr3 = next->cr3 ? next->cr3 : g_kernel_cr3;
+    uint64_t cur_cr3;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
+    prev->cr3 = cur_cr3;
+    if (next_cr3 != cur_cr3)
+        __asm__ volatile("mov %0, %%cr3" :: "r"(next_cr3) : "memory");
+
+    context_switch(&prev->rsp, next_rsp);
 }
 
 void task_yield(void) {
     schedule();
+}
+
+void task_sleep(uint64_t ms) {
+    if (!g_current) return;
+    uint64_t ticks_to_sleep = ms / 10;
+    if (ticks_to_sleep == 0) ticks_to_sleep = 1;
+    g_current->wake_tick = pit_ticks() + ticks_to_sleep;
+    g_current->state = TASK_SLEEPING;
+    task_yield();
+}
+
+void scheduler_tick(void) {
+    uint64_t now = pit_ticks();
+    if (!g_current) return;
+    task_struct_t *t = g_current;
+    do {
+        if (t->state == TASK_SLEEPING && now >= t->wake_tick)
+            t->state = TASK_READY;
+        t = t->next;
+    } while (t != g_current);
 }
 
 static void idle_task(void) {
@@ -79,6 +119,8 @@ static void idle_task(void) {
 
 void scheduler_init(void) {
     serial_print("[scheduler] init\n");
+    /* captura o CR3 do kernel antes de qualquer processo ring-3 existir */
+    __asm__ volatile("mov %%cr3, %0" : "=r"(g_kernel_cr3));
     task_create(idle_task);
     g_current->state = TASK_RUNNING;
     serial_print("[scheduler] pronto\n");

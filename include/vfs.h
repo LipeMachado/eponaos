@@ -29,6 +29,8 @@ struct vfs_filesystem {
     int (*read)(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf);
     int (*write)(vfs_node_t *node, uint64_t offset, uint64_t size, void *buf);
     int (*readdir)(vfs_node_t *node, int (*cb)(const char *name, uint32_t size, uint8_t flags, void *), void *arg);
+    vfs_node_t *(*create)(vfs_node_t *parent, const char *name, uint8_t flags);
+    int (*unlink)(vfs_node_t *parent, const char *name);
 };
 
 typedef struct {
@@ -39,9 +41,12 @@ typedef struct {
 void vfs_init(void);
 int vfs_mount(const char *path, vfs_filesystem_t *fs);
 file_t *vfs_open(const char *path);
+file_t *vfs_create(const char *path);
 int vfs_read(file_t *f, uint64_t size, void *buf);
 int vfs_write(file_t *f, uint64_t size, void *buf);
 void vfs_close(file_t *f);
 int vfs_readdir(const char *path, int (*cb)(const char *name, uint32_t size, uint8_t flags, void *), void *arg);
+int vfs_unlink(const char *path);
+int vfs_stat(const char *path, uint32_t *size, uint8_t *flags);
 
 #endif

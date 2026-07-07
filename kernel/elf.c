@@ -3,7 +3,7 @@
 #include "pmm.h"
 #include "paging.h"
 #include "heap.h"
-#include "vga.h"
+#include "gpu.h"
 #include "serial.h"
 #include "string.h"
 #include <stdint.h>
@@ -12,11 +12,17 @@
 
 int elf_load(const char *path, uint64_t *entry, uint64_t *stack_top, uint64_t *pml4_out) {
     char full[64];
-    full[0] = '/';
     int pl = (int) strlen(path);
-    if (pl > 62) pl = 62;
-    memcpy(full + 1, path, (size_t) pl);
-    full[1 + pl] = 0;
+    if (path[0] == '/') {
+        if (pl > 63) pl = 63;
+        memcpy(full, path, (size_t) pl);
+        full[pl] = 0;
+    } else {
+        full[0] = '/';
+        if (pl > 62) pl = 62;
+        memcpy(full + 1, path, (size_t) pl);
+        full[1 + pl] = 0;
+    }
 
     file_t *f = vfs_open(full);
     if (!f) {

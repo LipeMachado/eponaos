@@ -93,6 +93,29 @@ static vfs_node_t *vfs_resolve(vfs_filesystem_t *fs, const char *path) {
     return curr;
 }
 
+static int vfs_split_parent(const char *path, char *parent, char *name) {
+    size_t len = strlen(path);
+    if (len == 0) return -1;
+
+    size_t slash = len;
+    while (slash > 0 && path[slash - 1] != '/')
+        slash--;
+
+    if (slash == len) return -1;
+
+    if (slash == 0) {
+        parent[0] = 0;
+    } else {
+        size_t plen = slash - 1;
+        if (plen > 255) plen = 255;
+        memcpy(parent, path, plen);
+        parent[plen] = 0;
+    }
+
+    strcpy(name, path + slash);
+    return name[0] ? 0 : -1;
+}
+
 file_t *vfs_open(const char *path) {
     char mount[256], rest[256];
     int idx = vfs_split_path(path, mount, rest);
@@ -102,6 +125,45 @@ file_t *vfs_open(const char *path) {
     vfs_node_t *node = vfs_resolve(fs, rest);
     if (!node || !(node->flags & VFS_FILE))
         return NULL;
+
+    file_t *f = (file_t *) kmalloc(sizeof(file_t));
+    if (!f) return NULL;
+    f->node = node;
+    f->offset = 0;
+    return f;
+}
+
+file_t *vfs_create(const char *path) {
+    char mount[256], rest[256];
+    int idx = vfs_split_path(path, mount, rest);
+    if (idx < 0) return NULL;
+
+    vfs_filesystem_t *fs = g_mounts[idx];
+    if (!fs->create) return NULL;
+
+    vfs_node_t *existing = vfs_resolve(fs, rest);
+    if (existing && (existing->flags & VFS_FILE)) {
+        existing->size = 0;
+        file_t *f = (file_t *) kmalloc(sizeof(file_t));
+        if (!f) return NULL;
+        f->node = existing;
+        f->offset = 0;
+        return f;
+    }
+
+    char parent_path[256], name[256];
+    if (vfs_split_parent(rest, parent_path, name) < 0)
+        return NULL;
+
+    vfs_node_t *parent = vfs_resolve(fs, parent_path);
+    if (!parent || !(parent->flags & VFS_DIR))
+        return NULL;
+
+    if (!parent->children && fs->readdir)
+        fs->readdir(parent, NULL, NULL);
+
+    vfs_node_t *node = fs->create(parent, name, VFS_FILE);
+    if (!node) return NULL;
 
     file_t *f = (file_t *) kmalloc(sizeof(file_t));
     if (!f) return NULL;
@@ -134,6 +196,58 @@ int vfs_write(file_t *f, uint64_t size, void *buf) {
 
 void vfs_close(file_t *f) {
     if (f) kfree(f);
+}
+
+int vfs_unlink(const char *path) {
+    char mount[256], rest[256];
+    int idx = vfs_split_path(path, mount, rest);
+    if (idx < 0) return -1;
+
+    vfs_filesystem_t *fs = g_mounts[idx];
+    if (!fs->unlink) return -1;
+
+    char parent_path[256], name[256];
+    if (vfs_split_parent(rest, parent_path, name) < 0)
+        return -1;
+
+    vfs_node_t *parent = vfs_resolve(fs, parent_path);
+    if (!parent || !(parent->flags & VFS_DIR))
+        return -1;
+
+    if (!parent->children && fs->readdir)
+        fs->readdir(parent, NULL, NULL);
+
+    vfs_node_t *prev = NULL;
+    vfs_node_t *child = parent->children;
+    while (child) {
+        if (strcmp(child->name, name) == 0) {
+            int ret = fs->unlink(parent, name);
+            if (ret < 0) return ret;
+            if (prev)
+                prev->next = child->next;
+            else
+                parent->children = child->next;
+            return 0;
+        }
+        prev = child;
+        child = child->next;
+    }
+
+    return fs->unlink(parent, name);
+}
+
+int vfs_stat(const char *path, uint32_t *size, uint8_t *flags) {
+    char mount[256], rest[256];
+    int idx = vfs_split_path(path, mount, rest);
+    if (idx < 0) return -1;
+
+    vfs_filesystem_t *fs = g_mounts[idx];
+    vfs_node_t *node = vfs_resolve(fs, rest);
+    if (!node) return -1;
+
+    if (size) *size = node->size;
+    if (flags) *flags = node->flags;
+    return 0;
 }
 
 int vfs_readdir(const char *path, int (*cb)(const char *, uint32_t, uint8_t, void *), void *arg) {

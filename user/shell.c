@@ -107,9 +107,14 @@ static void cmd_help(void) {
     puts("  pwd               print working directory\n");
     puts("  ls [path]         list directory\n");
     puts("  cat <file>        print file\n");
+    puts("  write <file> <t>  create/overwrite file\n");
+    puts("  rm <file>         delete file\n");
+    puts("  stat <file>       show file info\n");
+    puts("  run <elf>         execute ELF\n");
     puts("  epp <cmd> [pkg]   Epona Package manager\n");
     puts("  <file>.epk        execute package manifest\n");
     puts("  echo <text>       print text\n");
+    puts("  edit              text editor (prompts for file)\n");
     puts("  exit              return to kernel shell\n");
 }
 
@@ -455,6 +460,96 @@ static void cmd_cat(char **tokens, int argc) {
     putc('\n');
 }
 
+static void cmd_write(char **tokens, int argc) {
+    if (argc < 3) {
+        puts("usage: write <file> <text>\n");
+        return;
+    }
+
+    int fd = sys_create(tokens[1]);
+    if (fd < 0) {
+        puts("write: cannot create ");
+        puts(tokens[1]);
+        putc('\n');
+        return;
+    }
+
+    for (int i = 2; i < argc; i++) {
+        if (i > 2)
+            sys_write(fd, " ", 1);
+        sys_write(fd, tokens[i], (uint64_t)strlen(tokens[i]));
+    }
+    sys_write(fd, "\n", 1);
+    sys_close(fd);
+}
+
+static void cmd_run(char **tokens, int argc) {
+    if (argc < 2) {
+        puts("usage: run <elf>\n");
+        return;
+    }
+
+    if (ends_with(tokens[1], ".epk")) {
+        puts("run: .epk files are package manifests, not ELF binaries\n");
+        return;
+    }
+
+    puts("Executing ELF...\n");
+    if (sys_exec(tokens[1]) < 0) {
+        puts("run: cannot execute ");
+        puts(tokens[1]);
+        putc('\n');
+    }
+}
+
+static void cmd_rm(char **tokens, int argc) {
+    if (argc < 2) {
+        puts("usage: rm <file>\n");
+        return;
+    }
+
+    if (sys_unlink(tokens[1]) < 0) {
+        puts("rm: cannot remove ");
+        puts(tokens[1]);
+        putc('\n');
+    }
+}
+
+static void cmd_stat(char **tokens, int argc) {
+    if (argc < 2) {
+        puts("usage: stat <file>\n");
+        return;
+    }
+
+    uint32_t size;
+    uint8_t flags;
+    int res = sys_stat(tokens[1], &size, &flags);
+    if (res < 0) {
+        puts("stat: cannot stat ");
+        puts(tokens[1]);
+        putc('\n');
+        return;
+    }
+
+    puts(tokens[1]);
+    if (flags & 2) puts(" (dir)");
+    else puts(" (file)");
+    putc('\n');
+    puts("  size: ");
+
+    char num[12];
+    int ni = 11;
+    num[ni] = 0;
+    uint32_t n = size;
+    if (n == 0) num[--ni] = '0';
+    while (n) {
+        num[--ni] = (char)('0' + n % 10);
+        n /= 10;
+    }
+    puts(&num[ni]);
+    puts(" bytes\n");
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     char line[LINE_MAX];
@@ -487,8 +582,23 @@ int main(int argc, char **argv) {
         else if (strcmp(tokens[0], "cat") == 0) {
             cmd_cat(tokens, argc2);
         }
+        else if (strcmp(tokens[0], "write") == 0) {
+            cmd_write(tokens, argc2);
+        }
+        else if (strcmp(tokens[0], "run") == 0) {
+            cmd_run(tokens, argc2);
+        }
+        else if (strcmp(tokens[0], "rm") == 0) {
+            cmd_rm(tokens, argc2);
+        }
+        else if (strcmp(tokens[0], "stat") == 0) {
+            cmd_stat(tokens, argc2);
+        }
         else if (strcmp(tokens[0], "epp") == 0) {
             cmd_epp(tokens, argc2);
+        }
+        else if (strcmp(tokens[0], "edit") == 0) {
+            sys_exec("EDIT.ELF");
         }
         else if (strcmp(tokens[0], "echo") == 0) {
             for (int i = 1; i < argc2; i++) {

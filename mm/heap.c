@@ -43,7 +43,7 @@ static void heap_coalesce(heap_header_t *h) {
 
 void heap_init(void) {
     serial_print("[heap] init\n");
-    paging_map_range(g_heap_virt, (uint64_t) pmm_alloc(), 256, PAGE_RW);
+    paging_map_range(g_heap_virt, (uint64_t) pmm_alloc_contiguous(256), 256, PAGE_RW);
     g_heap_virt_top = g_heap_virt + 256 * PAGE_SIZE;
     g_heap_start = heap_create_block(g_heap_virt, 256 * PAGE_SIZE);
     g_heap_end = g_heap_start;

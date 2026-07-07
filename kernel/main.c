@@ -1,6 +1,6 @@
 /* kernel/main.c — nucleo do EponaOS */
 #include "serial.h"
-#include "vga.h"
+#include "gpu.h"
 #include "gdt.h"
 #include "idt.h"
 #include "pic.h"
@@ -32,11 +32,11 @@ static void print_u64(uint64_t v) {
         buf[--i] = (char) ('0' + v % 10);
         v /= 10;
     }
-    vga_print(&buf[i]);
+    gpu_print(&buf[i]);
     serial_print(&buf[i]);
 }
 
-static void vga_print_ip(uint32_t ip) {
+static void print_ip(uint32_t ip) {
     char buf[4];
     for (int part = 0; part < 4; part++) {
         uint8_t n = (uint8_t) ((ip >> (part * 8)) & 0xFF);
@@ -47,19 +47,19 @@ static void vga_print_ip(uint32_t ip) {
             buf[i++] = (char) ('0' + (n / 10) % 10);
         buf[i++] = (char) ('0' + n % 10);
         buf[i] = 0;
-        vga_print(buf);
+        gpu_print(buf);
         if (part < 3)
-            vga_print(".");
+            gpu_print(".");
     }
 }
 
-static void vga_print_preview(const char *s, int max) {
+static void print_preview(const char *s, int max) {
     for (int i = 0; s[i] && i < max; i++) {
         char c = s[i];
         if (c == '\r' || c == '\n' || c == '\t')
-            vga_print(" ");
+            gpu_print(" ");
         else
-            vga_putc(c);
+            gpu_putc(c);
     }
 }
 
@@ -69,7 +69,6 @@ void task_a(void) {
     uint32_t ticks = 0;
     while (1) {
         if (++ticks == 1000000) {
-            serial_print("A");
             ticks = 0;
         }
     }
@@ -80,7 +79,6 @@ void task_b(void) {
     uint32_t ticks = 0;
     while (1) {
         if (++ticks == 1000000) {
-            serial_print("B");
             ticks = 0;
         }
     }
@@ -95,7 +93,7 @@ void task_net(void) {
 
 void kernel_main(void) {
     serial_init();
-    vga_init();
+    gpu_init();
     gdt_init();
     idt_init();
     pic_remap();
@@ -103,6 +101,7 @@ void kernel_main(void) {
     pmm_init();
     paging_init();
     heap_init();
+    gpu_init_framebuffer();
     pci_enumerate();
     mouse_init();
 
@@ -183,44 +182,44 @@ void kernel_main(void) {
     scheduler_init();
     sys_fd_init();
 
-    vga_set_color(0x0B, 0x00);
-    vga_print("=== EponaOS ===\n");
-    vga_set_color(0x0F, 0x00);
-    vga_print("Kernel em C, long mode 64-bit.\n");
-    vga_print("GDT + TSS + IDT carregadas.\n");
-    vga_print("Scheduler round-robin preemptivo.\n");
+    gpu_set_color(0x0B, 0x00);
+    gpu_print("=== EponaOS ===\n");
+    gpu_set_color(0x0F, 0x00);
+    gpu_print("Kernel em C, long mode 64-bit.\n");
+    gpu_print("GDT + TSS + IDT carregadas.\n");
+    gpu_print("Scheduler round-robin preemptivo.\n");
     serial_print("[pmm] init ok.\n");
 
-    vga_print("RAM total: ");
+    gpu_print("RAM total: ");
     print_u64(pmm_total_bytes() / (1024 * 1024));
-    vga_print(" MiB\n");
+    gpu_print(" MiB\n");
 
     if (net_is_configured()) {
-        vga_set_color(0x0A, 0x00);
-        vga_print("Rede: DHCP OK  IP ");
-        vga_print_ip(net_local_ip());
-        vga_print("\n");
+        gpu_set_color(0x0A, 0x00);
+        gpu_print("Rede: DHCP OK  IP ");
+        print_ip(net_local_ip());
+        gpu_print("\n");
     } else {
-        vga_set_color(0x0C, 0x00);
-        vga_print("Rede: DHCP falhou\n");
+        gpu_set_color(0x0C, 0x00);
+        gpu_print("Rede: DHCP falhou\n");
     }
 
     if (net_dns_answer_ip()) {
-        vga_set_color(0x0A, 0x00);
-        vga_print("DNS: example.com = ");
-        vga_print_ip(net_dns_answer_ip());
-        vga_print("\n");
+        gpu_set_color(0x0A, 0x00);
+        gpu_print("DNS: example.com = ");
+        print_ip(net_dns_answer_ip());
+        gpu_print("\n");
     }
 
-    vga_set_color(net_http_ok() ? 0x0A : 0x0C, 0x00);
-    vga_print(net_http_ok() ? "HTTP: GET / OK\n" : "HTTP: sem resposta\n");
+    gpu_set_color(net_http_ok() ? 0x0A : 0x0C, 0x00);
+    gpu_print(net_http_ok() ? "HTTP: GET / OK\n" : "HTTP: sem resposta\n");
     if (net_http_body_len() > 0) {
-        vga_set_color(0x0E, 0x00);
-        vga_print("HTML: ");
-        vga_print_preview(net_http_body_preview(), 66);
-        vga_print("\n");
+        gpu_set_color(0x0E, 0x00);
+        gpu_print("HTML: ");
+        print_preview(net_http_body_preview(), 66);
+        gpu_print("\n");
     }
-    vga_set_color(0x0F, 0x00);
+    gpu_set_color(0x0F, 0x00);
 
     task_create(task_a);
     task_create(task_b);
@@ -228,7 +227,7 @@ void kernel_main(void) {
 
     __asm__ volatile("sti");
     serial_print("[kernel] multitarefa ativa.\n");
-    vga_print("Digite 'help' para comandos.\n\n");
+    gpu_print("Digite 'help' para comandos.\n\n");
 
     shell_run();
 

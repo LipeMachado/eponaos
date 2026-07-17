@@ -172,6 +172,32 @@ file_t *vfs_create(const char *path) {
     return f;
 }
 
+int vfs_mkdir(const char *path) {
+    char mount[256], rest[256];
+    int idx = vfs_split_path(path, mount, rest);
+    if (idx < 0) return -1;
+
+    vfs_filesystem_t *fs = g_mounts[idx];
+    if (!fs->create) return -1;
+
+    if (vfs_resolve(fs, rest) != NULL)
+        return -1; /* ja existe */
+
+    char parent_path[256], name[256];
+    if (vfs_split_parent(rest, parent_path, name) < 0)
+        return -1;
+
+    vfs_node_t *parent = vfs_resolve(fs, parent_path);
+    if (!parent || !(parent->flags & VFS_DIR))
+        return -1;
+
+    if (!parent->children && fs->readdir)
+        fs->readdir(parent, NULL, NULL);
+
+    vfs_node_t *node = fs->create(parent, name, VFS_DIR);
+    return node ? 0 : -1;
+}
+
 int vfs_read(file_t *f, uint64_t size, void *buf) {
     if (!f || !f->node || !f->node->fs || !f->node->fs->read)
         return -1;

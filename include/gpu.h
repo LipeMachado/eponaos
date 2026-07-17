@@ -35,6 +35,7 @@ void gpu_end_target(void);
 void gpu_blit_buffer(const uint32_t *buf, uint16_t bw, uint16_t bh, uint16_t dst_x, uint16_t dst_y);
 void gpu_set_console_viewport(uint16_t x, uint16_t y, uint16_t cols, uint16_t rows);
 void gpu_reset_console_viewport(void);
+uint16_t gpu_console_cols(void);
 void gpu_set_cursor(uint16_t row, uint16_t col);
 void gpu_get_cursor(uint16_t *row, uint16_t *col);
 void gpu_erase_display(int mode);

@@ -525,6 +525,10 @@ void gpu_reset_console_viewport(void) {
     g_vp_rows = g_fb_enabled ? (uint16_t)g_fb_rows : VGA_ROWS;
 }
 
+uint16_t gpu_console_cols(void) {
+    return g_fb_enabled ? g_vp_cols : VGA_COLS;
+}
+
 void gpu_set_cursor(uint16_t row, uint16_t col) {
     size_t rows = g_fb_enabled ? g_vp_rows : VGA_ROWS;
     size_t cols = g_fb_enabled ? g_vp_cols : VGA_COLS;

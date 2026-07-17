@@ -1,6 +1,7 @@
 #include "gui.h"
 #include "gpu.h"
 #include "term.h"
+#include "shell.h"
 #include "io.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -35,6 +36,10 @@ typedef struct {
     term_ctx_t term;          /* parser VT100 (so usado se kind==WIN_TERMINAL) */
     uint16_t cur_row, cur_col; /* cursor do console desta janela, entre chamadas */
     const char *static_text;  /* linhas com \n, so kind==WIN_STATIC */
+    /* estado de edicao de linha do prompt, so usado se kind==WIN_TERMINAL */
+    char line_buf[SHELL_LINE_MAX];
+    int line_pos;
+    int line_cpos;
 } window_t;
 
 static window_t g_win[MAX_WINDOWS];
@@ -71,6 +76,9 @@ static int win_create(win_kind_t kind, const char *title, int x, int y, int cw, 
         w->kind = kind;
         w->buf = (uint32_t *)kmalloc((uint32_t)(cw * ch * 4));
         w->static_text = static_text;
+        w->line_pos = 0;
+        w->line_cpos = 0;
+        w->line_buf[0] = 0;
         g_zorder[g_win_count] = i;
         g_win_count++;
         return i;
@@ -132,27 +140,93 @@ static void win_render_terminal_init(window_t *w) {
     gpu_set_color(0x0F, 0x00);
     gpu_set_cursor(0, 0);
 
-    term_ctx_print(&w->term, "EponaOS - demo terminal VT100/ANSI\r\n");
+    term_ctx_print(&w->term, "EponaOS - Terminal\r\n");
     term_ctx_print(&w->term,
                    "\x1b[31mvermelho \x1b[32mverde \x1b[33mamarelo \x1b[34mazul "
                    "\x1b[35mmagenta \x1b[36mciano\x1b[0m\r\n");
     term_ctx_print(&w->term, "\x1b[1;37mnegrito/brilhante\x1b[0m normal\r\n\r\n");
-    term_ctx_print(&w->term, "digite algo (ESC fecha a GUI):\r\n");
 
+    gpu_get_cursor(&w->cur_row, &w->cur_col);
+    shell_print_prompt();
     gpu_get_cursor(&w->cur_row, &w->cur_col);
     gpu_end_target();
     gpu_reset_console_viewport();
 }
 
-static void win_terminal_feed(window_t *w, char c) {
+static void gui_terminal_redraw_line(window_t *w) {
     gpu_begin_target(w->buf, (uint16_t)w->cw, (uint16_t)w->ch);
     gpu_set_console_viewport(0, 0, (uint16_t)(w->cw / 8), (uint16_t)(w->ch / 16));
     gpu_set_color(w->term.fg, w->term.bg);
     gpu_set_cursor(w->cur_row, w->cur_col);
-    term_ctx_putc(&w->term, c);
+    shell_redraw_line(w->line_buf, w->line_pos, w->line_cpos);
     gpu_get_cursor(&w->cur_row, &w->cur_col);
     gpu_end_target();
     gpu_reset_console_viewport();
+}
+
+static void gui_dispatch_command(window_t *w) {
+    gpu_begin_target(w->buf, (uint16_t)w->cw, (uint16_t)w->ch);
+    gpu_set_console_viewport(0, 0, (uint16_t)(w->cw / 8), (uint16_t)(w->ch / 16));
+    gpu_set_color(w->term.fg, w->term.bg);
+    gpu_set_cursor(w->cur_row, w->cur_col);
+
+    shell_set_gui_context(1);
+    shell_dispatch_line(w->line_buf);
+    shell_set_gui_context(0);
+
+    shell_print_prompt();
+    gpu_get_cursor(&w->cur_row, &w->cur_col);
+    gpu_end_target();
+    gpu_reset_console_viewport();
+
+    w->line_pos = 0;
+    w->line_cpos = 0;
+    w->line_buf[0] = 0;
+}
+
+static void win_terminal_feed(window_t *w, int c) {
+    if (c == '\n') {
+        gpu_begin_target(w->buf, (uint16_t)w->cw, (uint16_t)w->ch);
+        gpu_set_console_viewport(0, 0, (uint16_t)(w->cw / 8), (uint16_t)(w->ch / 16));
+        gpu_set_color(w->term.fg, w->term.bg);
+        gpu_set_cursor(w->cur_row, w->cur_col);
+        term_ctx_putc(&w->term, '\r');
+        term_ctx_putc(&w->term, '\n');
+        gpu_get_cursor(&w->cur_row, &w->cur_col);
+        gpu_end_target();
+        gpu_reset_console_viewport();
+
+        gui_dispatch_command(w);
+        return;
+    }
+    if (c == '\b') {
+        if (w->line_cpos > 0) {
+            shell_backspace_char(w->line_buf, &w->line_pos, &w->line_cpos);
+            gui_terminal_redraw_line(w);
+        }
+        return;
+    }
+    if (c == KEY_DEL) {
+        shell_delete_char(w->line_buf, &w->line_pos, &w->line_cpos);
+        gui_terminal_redraw_line(w);
+        return;
+    }
+    if (c == '\t') return;
+    if (c == KEY_LEFT) {
+        if (w->line_cpos > 0) { w->line_cpos--; gui_terminal_redraw_line(w); }
+        return;
+    }
+    if (c == KEY_RIGHT) {
+        if (w->line_cpos < w->line_pos) { w->line_cpos++; gui_terminal_redraw_line(w); }
+        return;
+    }
+    if (c == KEY_HOME) { w->line_cpos = 0; gui_terminal_redraw_line(w); return; }
+    if (c == KEY_END)  { w->line_cpos = w->line_pos; gui_terminal_redraw_line(w); return; }
+
+    if (c >= 32 && c < 127 && w->line_pos < SHELL_LINE_MAX - 1) {
+        shell_insert_char(w->line_buf, &w->line_pos, &w->line_cpos, c, SHELL_LINE_MAX);
+        gui_terminal_redraw_line(w);
+    }
 }
 
 static void draw_window_chrome(const window_t *w, int focused) {
@@ -488,7 +562,7 @@ void gui_run_desktop(void) {
         if (c && g_focus_zpos >= 0) {
             window_t *fw = &g_win[g_zorder[g_focus_zpos]];
             if (fw->kind == WIN_TERMINAL) {
-                win_terminal_feed(fw, (char)c);
+                win_terminal_feed(fw, c);
                 gpu_blit_buffer(fw->buf, (uint16_t)fw->cw, (uint16_t)fw->ch,
                                 (uint16_t)win_client_x(fw), (uint16_t)win_client_y(fw));
                 gpu_flip_rect((uint16_t)win_client_x(fw), (uint16_t)win_client_y(fw),

@@ -375,10 +375,11 @@ static int fat_name_to_83(const char *name, char out_name[8], char out_ext[3]) {
 }
 
 static vfs_node_t *fat_create(vfs_node_t *parent, const char *name, uint8_t flags) {
-    if (!(flags & VFS_FILE)) return NULL;
+    if (!(flags & (VFS_FILE | VFS_DIR))) return NULL;
 
     fat_private_t *fp = fat_get_private(parent);
     uint32_t cluster = fat_node_cluster(parent);
+    uint32_t parent_dir_cluster = cluster; /* preservado p/ a entrada ".." */
     char fat_name[8], fat_ext[3];
     if (fat_name_to_83(name, fat_name, fat_ext) < 0)
         return NULL;
@@ -401,33 +402,70 @@ static vfs_node_t *fat_create(vfs_node_t *parent, const char *name, uint8_t flag
             if (de->name[0] != 0 && (uint8_t)de->name[0] != 0xE5)
                 continue;
 
-            uint32_t file_cluster = fat_alloc_cluster(fp);
-            if (!file_cluster) return NULL;
+            uint32_t new_cluster = fat_alloc_cluster(fp);
+            if (!new_cluster) return NULL;
+            uint32_t new_lba = fat_cluster_to_lba(fp, new_cluster);
 
-            uint8_t zero[512];
-            memset(zero, 0, sizeof(zero));
-            uint32_t file_lba = fat_cluster_to_lba(fp, file_cluster);
-            for (uint8_t s = 0; s < fp->bpb.sectors_per_cluster; s++)
-                ata_write_sectors(fp->bus, fp->master, file_lba + s, 1, zero);
+            if (flags & VFS_DIR) {
+                /* sector 0 do novo cluster: entradas "." e ".."; resto zerado
+                 * (byte 0 == 0 sinaliza "fim do diretorio" p/ fat_readdir). */
+                uint8_t first_sector[512];
+                memset(first_sector, 0, sizeof(first_sector));
+
+                fat_dirent_t *dot = (fat_dirent_t *)(first_sector + 0);
+                fat_dirent_t *dotdot = (fat_dirent_t *)(first_sector + 32);
+
+                memset(dot->name, ' ', 8);
+                dot->name[0] = '.';
+                memset(dot->ext, ' ', 3);
+                dot->attrs = FAT_ATTR_DIR;
+                dot->cluster_hi = (uint16_t)(new_cluster >> 16);
+                dot->cluster_lo = (uint16_t)(new_cluster & 0xFFFF);
+                dot->size = 0;
+
+                memset(dotdot->name, ' ', 8);
+                dotdot->name[0] = '.';
+                dotdot->name[1] = '.';
+                memset(dotdot->ext, ' ', 3);
+                dotdot->attrs = FAT_ATTR_DIR;
+                /* convencao FAT32: ".." no diretorio-pai-e-a-raiz aponta pro
+                 * cluster 0, mesmo a raiz sendo um cluster de verdade. */
+                uint32_t dotdot_cluster = (parent == parent->fs->root) ? 0 : parent_dir_cluster;
+                dotdot->cluster_hi = (uint16_t)(dotdot_cluster >> 16);
+                dotdot->cluster_lo = (uint16_t)(dotdot_cluster & 0xFFFF);
+                dotdot->size = 0;
+
+                ata_write_sectors(fp->bus, fp->master, new_lba, 1, first_sector);
+
+                uint8_t zero[512];
+                memset(zero, 0, sizeof(zero));
+                for (uint8_t s = 1; s < fp->bpb.sectors_per_cluster; s++)
+                    ata_write_sectors(fp->bus, fp->master, new_lba + s, 1, zero);
+            } else {
+                uint8_t zero[512];
+                memset(zero, 0, sizeof(zero));
+                for (uint8_t s = 0; s < fp->bpb.sectors_per_cluster; s++)
+                    ata_write_sectors(fp->bus, fp->master, new_lba + s, 1, zero);
+            }
 
             memcpy(de->name, fat_name, 8);
             memcpy(de->ext, fat_ext, 3);
-            de->attrs = FAT_ATTR_ARCHIVE;
+            de->attrs = (flags & VFS_DIR) ? FAT_ATTR_DIR : FAT_ATTR_ARCHIVE;
             de->reserved = 0;
             de->ctime_ms = 0;
             de->ctime = 0;
             de->cdate = 0;
             de->adate = 0;
-            de->cluster_hi = (uint16_t)(file_cluster >> 16);
+            de->cluster_hi = (uint16_t)(new_cluster >> 16);
             de->mtime = 0;
             de->mdate = 0;
-            de->cluster_lo = (uint16_t)(file_cluster & 0xFFFF);
+            de->cluster_lo = (uint16_t)(new_cluster & 0xFFFF);
             de->size = 0;
 
             if (ata_write_sectors(fp->bus, fp->master, lba + sector, 1, buf) < 0)
                 return NULL;
 
-            vfs_node_t *child = fat_create_node(name, 0, VFS_FILE, file_cluster, lba + sector, off, parent->fs, parent);
+            vfs_node_t *child = fat_create_node(name, 0, flags, new_cluster, lba + sector, off, parent->fs, parent);
             if (!child) return NULL;
             child->next = parent->children;
             parent->children = child;

@@ -42,6 +42,7 @@ void vfs_init(void);
 int vfs_mount(const char *path, vfs_filesystem_t *fs);
 file_t *vfs_open(const char *path);
 file_t *vfs_create(const char *path);
+int vfs_mkdir(const char *path);
 int vfs_read(file_t *f, uint64_t size, void *buf);
 int vfs_write(file_t *f, uint64_t size, void *buf);
 void vfs_close(file_t *f);

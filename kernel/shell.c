@@ -11,12 +11,11 @@
 #include "gui.h"
 #include <stdint.h>
 
-#define LINE_MAX 256
-#define TOKEN_MAX 16
 #define HIST_MAX 8
 
-static char g_history[HIST_MAX][LINE_MAX];
+static char g_history[HIST_MAX][SHELL_LINE_MAX];
 static int g_hist_count, g_hist_idx;
+static int g_shell_context_gui;
 
 static int ends_with(const char *s, const char *suffix) {
     size_t sl = strlen(s);
@@ -25,7 +24,11 @@ static int ends_with(const char *s, const char *suffix) {
     return strcmp(s + sl - sul, suffix) == 0;
 }
 
-static void print_prompt(void) {
+void shell_set_gui_context(int enabled) {
+    g_shell_context_gui = enabled;
+}
+
+void shell_print_prompt(void) {
     gpu_set_color(0x0A, 0x00);
     gpu_print("epona@epona");
     gpu_set_color(0x0F, 0x00);
@@ -37,24 +40,25 @@ static void print_prompt(void) {
 }
 
 /* re-desenha a linha: \r + prompt + buf + limpa resto + \r + prompt + cursor */
-static void redraw_line(const char *buf, int pos, int cpos) {
+void shell_redraw_line(const char *buf, int pos, int cpos) {
     (void)pos;
     int plen = (int) strlen(buf);
     int pcols = 15;
+    int cols = (int) gpu_console_cols() - 1;
     gpu_print("\r");
-    print_prompt();
+    shell_print_prompt();
     for (int i = 0; i < plen; i++)
         gpu_putc(buf[i]);
-    for (int i = pcols + plen; i < 79; i++)
+    for (int i = pcols + plen; i < cols; i++)
         gpu_putc(' ');
     gpu_print("\r");
-    print_prompt();
+    shell_print_prompt();
     for (int i = 0; i < cpos; i++)
         gpu_putc(buf[i]);
 }
 
 /* insere ch em buf[pos], desloca resto para direita */
-static void insert_char(char *buf, int *pos, int *cpos, int ch, int max) {
+void shell_insert_char(char *buf, int *pos, int *cpos, int ch, int max) {
     if (*pos >= max - 1) return;
     for (int i = *pos; i > *cpos; i--)
         buf[i] = buf[i - 1];
@@ -65,7 +69,7 @@ static void insert_char(char *buf, int *pos, int *cpos, int ch, int max) {
 }
 
 /* remove caractere antes do cursor */
-static void backspace_char(char *buf, int *pos, int *cpos) {
+void shell_backspace_char(char *buf, int *pos, int *cpos) {
     if (*cpos <= 0) return;
     for (int i = *cpos - 1; i < *pos - 1; i++)
         buf[i] = buf[i + 1];
@@ -75,7 +79,7 @@ static void backspace_char(char *buf, int *pos, int *cpos) {
 }
 
 /* remove caractere sob o cursor */
-static void delete_char(char *buf, int *pos, int *cpos) {
+void shell_delete_char(char *buf, int *pos, int *cpos) {
     if (*cpos >= *pos) return;
     for (int i = *cpos; i < *pos - 1; i++)
         buf[i] = buf[i + 1];
@@ -88,8 +92,8 @@ static void history_add(const char *line) {
     if (g_hist_count > 0 && strcmp(g_history[(g_hist_count - 1) % HIST_MAX], line) == 0)
         return;
     int idx = g_hist_count % HIST_MAX;
-    strncpy(g_history[idx], line, LINE_MAX - 1);
-    g_history[idx][LINE_MAX - 1] = 0;
+    strncpy(g_history[idx], line, SHELL_LINE_MAX - 1);
+    g_history[idx][SHELL_LINE_MAX - 1] = 0;
     g_hist_count++;
     g_hist_idx = g_hist_count;
 }
@@ -115,15 +119,15 @@ static void readline(char *buf, int max) {
 
         if (c == '\b') {
             if (cpos > 0) {
-                backspace_char(buf, &pos, &cpos);
-                redraw_line(buf, pos, cpos);
+                shell_backspace_char(buf, &pos, &cpos);
+                shell_redraw_line(buf, pos, cpos);
             }
             continue;
         }
 
         if (c == KEY_DEL) {
-            delete_char(buf, &pos, &cpos);
-            redraw_line(buf, pos, cpos);
+            shell_delete_char(buf, &pos, &cpos);
+            shell_redraw_line(buf, pos, cpos);
             continue;
         }
 
@@ -131,21 +135,21 @@ static void readline(char *buf, int max) {
 
         /* setas */
         if (c == KEY_LEFT) {
-            if (cpos > 0) { cpos--; redraw_line(buf, pos, cpos); }
+            if (cpos > 0) { cpos--; shell_redraw_line(buf, pos, cpos); }
             continue;
         }
         if (c == KEY_RIGHT) {
-            if (cpos < pos) { cpos++; redraw_line(buf, pos, cpos); }
+            if (cpos < pos) { cpos++; shell_redraw_line(buf, pos, cpos); }
             continue;
         }
         if (c == KEY_HOME) {
             cpos = 0;
-            redraw_line(buf, pos, cpos);
+            shell_redraw_line(buf, pos, cpos);
             continue;
         }
         if (c == KEY_END) {
             cpos = pos;
-            redraw_line(buf, pos, cpos);
+            shell_redraw_line(buf, pos, cpos);
             continue;
         }
         if (c == KEY_UP || c == KEY_DOWN) {
@@ -159,13 +163,13 @@ static void readline(char *buf, int max) {
             buf[hl] = 0;
             pos = hl;
             cpos = hl;
-            redraw_line(buf, pos, cpos);
+            shell_redraw_line(buf, pos, cpos);
             continue;
         }
 
         if (c >= 32 && c < 127 && pos < max - 1) {
-            insert_char(buf, &pos, &cpos, c, max);
-            redraw_line(buf, pos, cpos);
+            shell_insert_char(buf, &pos, &cpos, c, max);
+            shell_redraw_line(buf, pos, cpos);
         }
     }
 }
@@ -236,8 +240,11 @@ static void cmd_help(void) {
     gpu_print("  neofetch          info do sistema\n");
     gpu_print("  ip                config de rede\n");
     gpu_print("  http              status HTTP\n");
-    gpu_print("  ls                lista arquivos\n");
+    gpu_print("  ls [dir]          lista arquivos\n");
+    gpu_print("  cd [dir]          muda diretorio atual\n");
     gpu_print("  cat <arquivo>     le arquivo\n");
+    gpu_print("  mkdir <dir>       cria diretorio\n");
+    gpu_print("  touch <arquivo>   cria arquivo vazio\n");
     gpu_print("  echo <texto>      ecoa texto\n");
     gpu_print("  ping <ip>         ping ICMP\n");
     gpu_print("  dns <host>        consulta DNS\n");
@@ -343,6 +350,69 @@ static void cmd_http(void) {
     }
 }
 
+#define CWD_MAX 256
+static char g_cwd[CWD_MAX] = "/";
+
+/* colapsa "." / ".." / "//" de um path absoluto ja combinado em out;
+ * nunca sobe acima da raiz. Retorna 0 ou -1 (estouro / muitos componentes). */
+static int normalize_path(const char *combined, char *out, int max) {
+    const char *segs[32];
+    int seg_len[32];
+    int nseg = 0;
+    const char *p = combined;
+    while (*p) {
+        while (*p == '/') p++;
+        if (!*p) break;
+        const char *start = p;
+        while (*p && *p != '/') p++;
+        int len = (int)(p - start);
+        if (len == 1 && start[0] == '.') {
+            /* ignora */
+        } else if (len == 2 && start[0] == '.' && start[1] == '.') {
+            if (nseg > 0) nseg--;
+        } else {
+            if (nseg >= 32) return -1;
+            segs[nseg] = start;
+            seg_len[nseg] = len;
+            nseg++;
+        }
+    }
+    int pos = 0;
+    if (pos >= max) return -1;
+    out[pos++] = '/';
+    for (int i = 0; i < nseg; i++) {
+        if (i > 0) {
+            if (pos >= max - 1) return -1;
+            out[pos++] = '/';
+        }
+        if (pos + seg_len[i] >= max) return -1;
+        memcpy(out + pos, segs[i], (size_t)seg_len[i]);
+        pos += seg_len[i];
+    }
+    out[pos] = 0;
+    return 0;
+}
+
+/* resolve `input` (absoluto ou relativo a g_cwd) em `out`, absoluto e
+ * normalizado. input NULL/vazio => resolve para o proprio g_cwd. */
+static int resolve_path(const char *input, char *out, int max) {
+    char combined[CWD_MAX + SHELL_LINE_MAX];
+    if (!input || input[0] == 0) {
+        strncpy(combined, g_cwd, sizeof(combined) - 1);
+        combined[sizeof(combined) - 1] = 0;
+    } else if (input[0] == '/') {
+        strncpy(combined, input, sizeof(combined) - 1);
+        combined[sizeof(combined) - 1] = 0;
+    } else {
+        size_t gl = strlen(g_cwd), il = strlen(input);
+        if (gl + 1 + il >= sizeof(combined)) return -1;
+        memcpy(combined, g_cwd, gl);
+        combined[gl] = '/';
+        memcpy(combined + gl + 1, input, il + 1);
+    }
+    return normalize_path(combined, out, max);
+}
+
 struct ls_ctx { int count; };
 
 static int ls_cb(const char *name, uint32_t size, uint8_t flags, void *arg) {
@@ -362,26 +432,63 @@ static int ls_cb(const char *name, uint32_t size, uint8_t flags, void *arg) {
     return 0;
 }
 
-static void cmd_ls(void) {
+static void cmd_ls(const char *arg) {
+    char resolved[CWD_MAX];
+    if (resolve_path(arg, resolved, CWD_MAX) < 0) { gpu_print("ls: caminho invalido\n"); return; }
     struct ls_ctx ctx;
     ctx.count = 0;
-    gpu_print("/:\n");
-    vfs_readdir("/", ls_cb, &ctx);
+    gpu_print(resolved);
+    gpu_print(":\n");
+    vfs_readdir(resolved, ls_cb, &ctx);
     if (ctx.count == 0) gpu_print("  (vazio)\n");
 }
 
-static void cmd_cat(const char *path) {
-    char full[64];
-    full[0] = '/';
-    int pl = (int) strlen(path);
-    if (pl > 62) pl = 62;
-    memcpy(full + 1, path, (size_t) pl);
-    full[1 + pl] = 0;
+static void cmd_cd(char **args, int argc) {
+    char resolved[CWD_MAX];
+    const char *target = argc > 1 ? args[1] : "/";
+    if (resolve_path(target, resolved, CWD_MAX) < 0) { gpu_print("cd: caminho invalido\n"); return; }
+    uint32_t size; uint8_t flags;
+    if (vfs_stat(resolved, &size, &flags) < 0) {
+        gpu_print("cd: nao encontrado: "); gpu_print(resolved); gpu_print("\n");
+        return;
+    }
+    if (!(flags & VFS_DIR)) {
+        gpu_print("cd: nao e um diretorio: "); gpu_print(resolved); gpu_print("\n");
+        return;
+    }
+    strncpy(g_cwd, resolved, CWD_MAX - 1);
+    g_cwd[CWD_MAX - 1] = 0;
+}
 
-    file_t *f = vfs_open(full);
+static void cmd_mkdir(char **args, int argc) {
+    if (argc < 2) { gpu_print("Uso: mkdir <dir>\n"); return; }
+    char resolved[CWD_MAX];
+    if (resolve_path(args[1], resolved, CWD_MAX) < 0) { gpu_print("mkdir: caminho invalido\n"); return; }
+    if (vfs_mkdir(resolved) < 0) {
+        gpu_print("mkdir: falha ao criar: "); gpu_print(resolved); gpu_print("\n");
+    }
+}
+
+static void cmd_touch(char **args, int argc) {
+    if (argc < 2) { gpu_print("Uso: touch <arquivo>\n"); return; }
+    char resolved[CWD_MAX];
+    if (resolve_path(args[1], resolved, CWD_MAX) < 0) { gpu_print("touch: caminho invalido\n"); return; }
+    file_t *f = vfs_create(resolved);
+    if (!f) {
+        gpu_print("touch: falha ao criar: "); gpu_print(resolved); gpu_print("\n");
+        return;
+    }
+    vfs_close(f);
+}
+
+static void cmd_cat(const char *path) {
+    char resolved[CWD_MAX];
+    if (resolve_path(path, resolved, CWD_MAX) < 0) { gpu_print("cat: caminho invalido\n"); return; }
+
+    file_t *f = vfs_open(resolved);
     if (!f) {
         gpu_print("Arquivo nao encontrado: ");
-        gpu_print(path);
+        gpu_print(resolved);
         gpu_print("\n");
         return;
     }
@@ -471,6 +578,10 @@ static void cmd_fetch(char **args, int argc) {
 }
 
 static void cmd_run(char **args, int argc) {
+    if (g_shell_context_gui) {
+        gpu_print("run: desabilitado no Terminal da GUI (travaria a interface); use o console de texto.\n");
+        return;
+    }
     if (argc < 2) { gpu_print("Uso: run <elf>\n"); return; }
 
     if (ends_with(args[1], ".epk")) {
@@ -478,10 +589,13 @@ static void cmd_run(char **args, int argc) {
         return;
     }
 
+    char resolved[CWD_MAX];
+    if (resolve_path(args[1], resolved, CWD_MAX) < 0) { gpu_print("run: caminho invalido\n"); return; }
+
     uint64_t entry, stack_top, pml4;
-    if (elf_load(args[1], &entry, &stack_top, &pml4) < 0) {
+    if (elf_load(resolved, &entry, &stack_top, &pml4) < 0) {
         gpu_print("Falha ao carregar ELF: ");
-        gpu_print(args[1]);
+        gpu_print(resolved);
         gpu_print("\n");
         return;
     }
@@ -490,55 +604,64 @@ static void cmd_run(char **args, int argc) {
     enter_usermode_save_ret((void*)entry, (void*)stack_top, (void*)pml4);
 }
 
+void shell_dispatch_line(char *line) {
+    char *tokens[SHELL_TOKEN_MAX];
+    history_add(line);
+
+    int argc = tokenize(line, tokens, SHELL_TOKEN_MAX);
+    if (argc == 0) return;
+
+    const char *cmd = tokens[0];
+    if (strcmp(cmd, "help") == 0) {
+        cmd_help();
+    } else if (strcmp(cmd, "clear") == 0) {
+        cmd_clear();
+    } else if (strcmp(cmd, "gpuinfo") == 0) {
+        cmd_gpuinfo();
+    } else if (strcmp(cmd, "gui") == 0) {
+        gui_run_desktop();
+    } else if (strcmp(cmd, "neofetch") == 0) {
+        cmd_neofetch();
+    } else if (strcmp(cmd, "ip") == 0) {
+        cmd_ip();
+    } else if (strcmp(cmd, "http") == 0) {
+        cmd_http();
+    } else if (strcmp(cmd, "ls") == 0) {
+        cmd_ls(argc > 1 ? tokens[1] : "");
+    } else if (strcmp(cmd, "cd") == 0) {
+        cmd_cd(tokens, argc);
+    } else if (strcmp(cmd, "cat") == 0) {
+        cmd_cat(argc > 1 ? tokens[1] : "");
+    } else if (strcmp(cmd, "mkdir") == 0) {
+        cmd_mkdir(tokens, argc);
+    } else if (strcmp(cmd, "touch") == 0) {
+        cmd_touch(tokens, argc);
+    } else if (strcmp(cmd, "echo") == 0) {
+        cmd_echo(tokens, argc);
+    } else if (strcmp(cmd, "ping") == 0) {
+        cmd_ping(tokens, argc);
+    } else if (strcmp(cmd, "dns") == 0) {
+        cmd_dns(tokens, argc);
+    } else if (strcmp(cmd, "fetch") == 0) {
+        cmd_fetch(tokens, argc);
+    } else if (strcmp(cmd, "run") == 0) {
+        cmd_run(tokens, argc);
+    } else {
+        gpu_set_color(0x0C, 0x00);
+        gpu_print("Comando nao encontrado: ");
+        gpu_set_color(0x0F, 0x00);
+        gpu_print(cmd);
+        gpu_print("\n");
+    }
+}
+
 void shell_run(void) {
-    char line[LINE_MAX];
-    char *tokens[TOKEN_MAX];
+    char line[SHELL_LINE_MAX];
 
     while (1) {
-        print_prompt();
-        readline(line, LINE_MAX);
+        shell_print_prompt();
+        readline(line, SHELL_LINE_MAX);
         if (line[0] == '\0') continue;
-
-        history_add(line);
-
-        int argc = tokenize(line, tokens, TOKEN_MAX);
-        if (argc == 0) continue;
-
-        const char *cmd = tokens[0];
-        if (strcmp(cmd, "help") == 0) {
-            cmd_help();
-        } else if (strcmp(cmd, "clear") == 0) {
-            cmd_clear();
-        } else if (strcmp(cmd, "gpuinfo") == 0) {
-            cmd_gpuinfo();
-        } else if (strcmp(cmd, "gui") == 0) {
-            gui_run_desktop();
-        } else if (strcmp(cmd, "neofetch") == 0) {
-            cmd_neofetch();
-        } else if (strcmp(cmd, "ip") == 0) {
-            cmd_ip();
-        } else if (strcmp(cmd, "http") == 0) {
-            cmd_http();
-        } else if (strcmp(cmd, "ls") == 0) {
-            cmd_ls();
-        } else if (strcmp(cmd, "cat") == 0) {
-            cmd_cat(argc > 1 ? tokens[1] : "");
-        } else if (strcmp(cmd, "echo") == 0) {
-            cmd_echo(tokens, argc);
-        } else if (strcmp(cmd, "ping") == 0) {
-            cmd_ping(tokens, argc);
-        } else if (strcmp(cmd, "dns") == 0) {
-            cmd_dns(tokens, argc);
-        } else if (strcmp(cmd, "fetch") == 0) {
-            cmd_fetch(tokens, argc);
-        } else if (strcmp(cmd, "run") == 0) {
-            cmd_run(tokens, argc);
-        } else {
-            gpu_set_color(0x0C, 0x00);
-            gpu_print("Comando nao encontrado: ");
-            gpu_set_color(0x0F, 0x00);
-            gpu_print(cmd);
-            gpu_print("\n");
-        }
+        shell_dispatch_line(line);
     }
 }

@@ -99,15 +99,10 @@ void keyboard_irq(void) {
 }
 
 int keyboard_getc(void) {
-    while (g_head == g_tail && (inb(PS2_STATUS) & PS2_OUT_FULL)) {
-        uint8_t status = inb(PS2_STATUS);
-        if (status & PS2_AUX_DATA) {
-            (void)inb(PS2_DATA);
-            continue;
-        }
-        keyboard_irq();
-    }
-
+    /* nao-bloqueante: so drena o ring buffer. A IRQ1 real (kernel/isr.c)
+     * e a UNICA que le a porta PS/2 - fazer polling manual aqui tambem
+     * corria com ela e causava caracteres perdidos/duplicados ao digitar
+     * rapido. */
     if (g_head == g_tail) return 0;
     int code = g_buf[g_head];
     g_head = (g_head + 1) % KEYBUF_SIZE;
